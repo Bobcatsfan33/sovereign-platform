@@ -1,8 +1,12 @@
-# Sovereign OSB: Self-Service Envoy Load-Balancing Platform
+# Sovereign Platform
 
-A clean-room, production-oriented implementation of a platform architecture based on publicly described concepts from the video: Open Service Broker provisioning, Envoy control plane, dynamic templates, Packer/SaltStack image automation, multi-region load-balancer deployment, sidecar support, and operational auditability.
+A compliance-native self-service infrastructure platform for regulated and government environments. Sovereign Platform ships as a **base chassis** plus modular **service packs** (AI, Developer Platform, Data, SecOps, Identity, Edge, Multi-Cloud, Comms, Blockchain, FinOps).
 
-> This repository does not contain Atlassian proprietary code, diagrams, or confidential implementation details. It implements common cloud/platform-engineering patterns from public summaries and fills missing pieces with standard engineering design.
+> **North star**: any team inside a government agency can provision compliant infrastructure in minutes, not weeks. Every resource is born hardened, auditable, and policy-checked. The platform is the single control plane for all infrastructure.
+
+The base chassis grew out of a clean-room Open Service Broker implementation — Envoy control plane, OSB lifecycle, dynamic templates, Packer/SaltStack image automation, multi-region load-balancer deployment, sidecar support, and operational auditability. Governance services (dedicated audit pipeline, metering, policy decision models) are being merged in from the sovereign-ai-broker prototype during Phase 0 of the [product roadmap](../../Documents/sovereign-platform-roadmap.md).
+
+> This repository does not contain proprietary code, diagrams, or confidential implementation details from any third party. It implements common cloud/platform-engineering patterns from public summaries and fills missing pieces with standard engineering design.
 
 ## What this builds
 

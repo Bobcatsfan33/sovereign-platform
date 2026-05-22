@@ -1,7 +1,7 @@
 [project]
-name = "sovereign-osb"
+name = "sovereign-platform"
 version = "0.1.0"
-description = "Clean-room self-service Envoy load-balancing platform"
+description = "Compliance-native self-service infrastructure platform for regulated and government environments. Base chassis plus modular service packs."
 requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.111",

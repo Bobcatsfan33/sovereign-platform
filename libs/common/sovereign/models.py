@@ -1,6 +1,8 @@
 from datetime import datetime, timezone
 from enum import Enum
+from typing import Any
 from pydantic import BaseModel, Field, field_validator
+
 
 class InstanceStatus(str, Enum):
     provisioning = "provisioning"
@@ -76,3 +78,57 @@ class BindRequest(BaseModel):
 
 class RenderRequest(BaseModel):
     instance: ServiceInstance
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Governance models — merged from sovereign-ai-broker during Phase 0.1.
+# These are the shared shapes used by the dedicated audit service,
+# metering service, and policy engine that the base chassis depends on.
+# ─────────────────────────────────────────────────────────────────────
+
+class AuditEvent(BaseModel):
+    """A single audit record. Replaces the fabric's prior inline 5-field
+    ClickHouse schema with a tenant-aware, decision-aware shape so audit
+    output is usable for hierarchical tenancy (Phase 3) and policy
+    decision review (Phase 2)."""
+
+    ts: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    tenant_id: str = "default"
+    actor: str = "system"
+    action: str
+    resource: str
+    decision: str = "allow"
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class PolicyRequest(BaseModel):
+    """Input to the policy engine. The engine evaluates the action against
+    the configured Rego bundle and returns a PolicyDecision."""
+
+    tenant_id: str
+    actor: str
+    action: str
+    resource: str
+    attributes: dict[str, Any] = Field(default_factory=dict)
+
+
+class PolicyDecision(BaseModel):
+    """Output of the policy engine. `obligations` are side-effects the
+    caller must honor (e.g. PII redaction, logging, human approval)."""
+
+    allow: bool
+    reason: str = ""
+    obligations: list[str] = Field(default_factory=list)
+
+
+class Usage(BaseModel):
+    """A metering record. Persisted by the dedicated metering service and
+    later aggregated for the quota and chargeback system in Phase 3."""
+
+    ts: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    tenant_id: str
+    resource_id: str
+    resource_type: str
+    quantity: float = Field(ge=0)
+    unit: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
