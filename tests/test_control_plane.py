@@ -19,6 +19,9 @@ from sovereign.models import (
 )
 
 
+from .conftest import AUTH_HEADER  # noqa: E402
+
+
 @pytest.fixture
 def control_plane_app(control_plane_module: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
     """Replace the control-plane's outbound audit emit with a no-op so
@@ -48,14 +51,20 @@ def _render_request() -> dict[str, Any]:
 
 
 @mock_aws
-def test_render_writes_to_s3(control_plane_app: Any) -> None:
+def test_render_requires_bearer(control_plane_app: Any) -> None:
     with TestClient(control_plane_app.app) as client:
         r = client.post("/render", json=_render_request())
+        assert r.status_code == 401
+
+
+@mock_aws
+def test_render_writes_to_s3(control_plane_app: Any) -> None:
+    with TestClient(control_plane_app.app) as client:
+        r = client.post("/render", json=_render_request(), headers=AUTH_HEADER)
         assert r.status_code == 200, r.text
         body = r.json()
         assert body["key"] == "instances/demo-lb/v1/envoy.yaml"
 
-    # The startup hook created the bucket; verify the object landed.
     s3 = boto3.client("s3", region_name="us-east-1")
     head = s3.head_object(Bucket="sovereign-configs-test", Key=body["key"])
     assert head["ContentLength"] > 0
@@ -64,18 +73,22 @@ def test_render_writes_to_s3(control_plane_app: Any) -> None:
 @mock_aws
 def test_get_config_returns_yaml(control_plane_app: Any) -> None:
     with TestClient(control_plane_app.app) as client:
-        post = client.post("/render", json=_render_request())
+        post = client.post("/render", json=_render_request(), headers=AUTH_HEADER)
+        assert post.status_code == 200, post.text
         key_parts = post.json()["key"].split("/")
         instance_id, version = key_parts[1], int(key_parts[2].lstrip("v"))
 
         r = client.get(f"/instances/{instance_id}/versions/{version}/envoy.yaml")
         assert r.status_code == 200
-        # The current route returns a Python str, which FastAPI JSON-encodes.
-        # Task 0.5 will switch this to PlainTextResponse with the right
-        # content-type; until then we just verify the rendered YAML
-        # made it through round-trip (look for our cluster name).
-        assert "app" in r.text
+        # 0.5 fixed get_config to return raw YAML with the correct
+        # content-type rather than a JSON-encoded string.
+        assert r.headers["content-type"].startswith("application/x-yaml")
         assert "static_resources" in r.text
+        # Round-trip parses to a real document.
+        import yaml
+
+        doc = yaml.safe_load(r.text)
+        assert any(c["name"] == "app" for c in doc["static_resources"]["clusters"])
 
 
 @mock_aws
@@ -83,6 +96,10 @@ def test_get_config_404_for_missing(control_plane_app: Any) -> None:
     with TestClient(control_plane_app.app) as client:
         r = client.get("/instances/missing/versions/1/envoy.yaml")
         assert r.status_code == 404
+        # Problem-detail shape installed in 0.5
+        body = r.json()
+        assert body["status"] == 404
+        assert body["title"] == "not found"
 
 
 def test_healthz_open(control_plane_app: Any) -> None:
