@@ -35,22 +35,25 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 app = FastAPI(title="Sovereign Platform — Metering Service", version="0.1.0")
 
 _store: UsageStore | None = None
+_table_ensured: bool = False
 
 
 def _get_store() -> UsageStore:
-    global _store
+    """Return a lazily-initialised UsageStore. The DynamoDB table is
+    `ensure_table()`-d the first time the store is requested so the
+    service works regardless of whether FastAPI's startup event fires
+    (it doesn't in TestClient without an explicit lifespan context)."""
+    global _store, _table_ensured
     if _store is None:
         _store = UsageStore()
+    if not _table_ensured:
+        try:
+            _store.ensure_table()
+            _table_ensured = True
+            logger.info("metering store ready")
+        except Exception:  # noqa: BLE001
+            logger.exception("ensure_table failed; will retry on next request")
     return _store
-
-
-@app.on_event("startup")
-def startup() -> None:
-    try:
-        _get_store().ensure_table()
-        logger.info("metering store ready")
-    except Exception:  # noqa: BLE001
-        logger.exception("failed to ensure DynamoDB table at startup; will retry on first write")
 
 
 @app.get("/healthz")

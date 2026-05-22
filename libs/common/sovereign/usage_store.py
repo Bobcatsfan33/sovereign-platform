@@ -95,6 +95,12 @@ class UsageStore:
         key_conditions: dict[str, Any] = {"tenant_id": tenant_id}
         kwargs: dict[str, Any] = {"Limit": min(max(limit, 1), 1000), "ScanIndexForward": False}
 
+        # Time-bounded sort-key range. event_id is "{ts.isoformat()}#{resource_id}#{rand}".
+        # Comparison semantics:
+        #   - since inclusive: ":lo = since.isoformat()" matches "since.iso#..." because
+        #     the bare ISO is lex-less-than-or-equal-to any "iso#suffix" form.
+        #   - until exclusive: ":hi = until.isoformat()" (without trailing delim) excludes
+        #     events at the until boundary, since "until.iso" < "until.iso#suffix".
         if since is not None and until is not None:
             kwargs["KeyConditionExpression"] = (
                 "tenant_id = :tid AND event_id BETWEEN :lo AND :hi"
@@ -102,14 +108,14 @@ class UsageStore:
             kwargs["ExpressionAttributeValues"] = {
                 ":tid": tenant_id,
                 ":lo": since.isoformat(),
-                ":hi": until.isoformat() + "~",  # '~' sorts after any '#...' suffix
+                ":hi": until.isoformat(),
             }
         elif since is not None:
             kwargs["KeyConditionExpression"] = "tenant_id = :tid AND event_id >= :lo"
             kwargs["ExpressionAttributeValues"] = {":tid": tenant_id, ":lo": since.isoformat()}
         elif until is not None:
             kwargs["KeyConditionExpression"] = "tenant_id = :tid AND event_id < :hi"
-            kwargs["ExpressionAttributeValues"] = {":tid": tenant_id, ":hi": until.isoformat() + "~"}
+            kwargs["ExpressionAttributeValues"] = {":tid": tenant_id, ":hi": until.isoformat()}
         else:
             kwargs["KeyConditionExpression"] = "tenant_id = :tid"
             kwargs["ExpressionAttributeValues"] = {":tid": tenant_id}
