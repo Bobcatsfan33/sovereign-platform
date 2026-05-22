@@ -21,7 +21,7 @@ from fastapi import Depends, FastAPI, HTTPException, Response, status
 from sovereign.audit import Audit
 from sovereign.errors import install_problem_detail_handlers
 from sovereign.models import RenderRequest
-from sovereign.render import render_envoy
+from sovereign.render import RenderValidationError, render_envoy
 from sovereign.security import require_bearer
 from sovereign.settings import get_settings
 
@@ -66,7 +66,16 @@ def healthz() -> dict[str, str]:
 @app.post("/render", dependencies=[Depends(require_bearer)])
 def render(req: RenderRequest) -> dict[str, Any]:
     s = get_settings()
-    body = render_envoy(req.instance)
+    try:
+        body = render_envoy(req.instance)
+    except RenderValidationError as exc:
+        # The rendered doc failed Envoy v3 schema validation. Refuse to
+        # write it to S3 — surface the structured error to the caller so
+        # they can correct the request (or report the template bug).
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
     key = f"instances/{req.instance.instance_id}/v{req.instance.version}/envoy.yaml"
     try:
         _s3_client().put_object(
