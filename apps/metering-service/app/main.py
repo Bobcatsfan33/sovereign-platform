@@ -24,7 +24,6 @@ from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.responses import JSONResponse
-
 from sovereign.models import Usage
 from sovereign.security import require_bearer
 from sovereign.usage_store import UsageStore

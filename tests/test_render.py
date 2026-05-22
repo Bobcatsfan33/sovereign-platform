@@ -1,4 +1,4 @@
-from sovereign.models import ServiceInstance, ProvisionRequest
+from sovereign.models import ProvisionRequest, ServiceInstance
 from sovereign.render import render_envoy
 
 

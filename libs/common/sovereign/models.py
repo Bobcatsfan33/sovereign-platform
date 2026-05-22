@@ -1,10 +1,11 @@
-from datetime import datetime, timezone
-from enum import Enum
+from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Any
+
 from pydantic import BaseModel, Field, field_validator
 
 
-class InstanceStatus(str, Enum):
+class InstanceStatus(StrEnum):
     provisioning = "provisioning"
     succeeded = "succeeded"
     failed = "failed"
@@ -49,15 +50,15 @@ class ServiceInstance(BaseModel):
     parameters: LbParameters
     status: InstanceStatus = InstanceStatus.provisioning
     version: int = 1
-    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-    updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
+    updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 class Binding(BaseModel):
     binding_id: str
     instance_id: str
     app_guid: str | None = None
     credentials: dict[str, str]
-    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 class ProvisionRequest(BaseModel):
     service_id: str
@@ -92,7 +93,7 @@ class AuditEvent(BaseModel):
     output is usable for hierarchical tenancy (Phase 3) and policy
     decision review (Phase 2)."""
 
-    ts: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    ts: datetime = Field(default_factory=lambda: datetime.now(UTC))
     tenant_id: str = "default"
     actor: str = "system"
     action: str
@@ -125,7 +126,7 @@ class Usage(BaseModel):
     """A metering record. Persisted by the dedicated metering service and
     later aggregated for the quota and chargeback system in Phase 3."""
 
-    ts: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    ts: datetime = Field(default_factory=lambda: datetime.now(UTC))
     tenant_id: str
     resource_id: str
     resource_type: str

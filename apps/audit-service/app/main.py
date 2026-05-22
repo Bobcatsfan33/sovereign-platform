@@ -36,7 +36,6 @@ from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.responses import JSONResponse
-
 from sovereign.models import AuditEvent
 from sovereign.security import require_bearer
 from sovereign.settings import get_settings

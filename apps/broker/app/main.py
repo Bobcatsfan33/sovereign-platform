@@ -23,12 +23,11 @@ import httpx
 from botocore.exceptions import ClientError
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
-
 from sovereign.audit import Audit
 from sovereign.errors import install_problem_detail_handlers
 from sovereign.models import (
-    BindRequest,
     Binding,
+    BindRequest,
     InstanceStatus,
     ProvisionRequest,
     RenderRequest,

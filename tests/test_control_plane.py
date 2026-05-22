@@ -8,7 +8,6 @@ import boto3
 import pytest
 from fastapi.testclient import TestClient
 from moto import mock_aws
-
 from sovereign.models import (
     Cluster,
     LbParameters,
@@ -17,7 +16,6 @@ from sovereign.models import (
     Route,
     ServiceInstance,
 )
-
 
 from .conftest import AUTH_HEADER  # noqa: E402
 

@@ -8,13 +8,12 @@ or DynamoDB Local container.
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
 from moto import mock_aws
-
 from sovereign.models import Usage
 
 from .conftest import AUTH_HEADER
@@ -31,7 +30,7 @@ def metering_app(metering_service_module: Any) -> Any:
 
 def _usage_body(*, when: datetime | None = None, resource_id: str = "demo-lb") -> dict[str, Any]:
     u = Usage(
-        ts=when or datetime.now(timezone.utc),
+        ts=when or datetime.now(UTC),
         tenant_id="acme",
         resource_id=resource_id,
         resource_type="lb-hour",
@@ -67,7 +66,7 @@ def test_record_and_query_round_trip(metering_app: Any) -> None:
     client.get("/healthz")
 
     # POST three usage records
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     for i in range(3):
         r = client.post(
             "/usage",
@@ -90,7 +89,7 @@ def test_record_and_query_round_trip(metering_app: Any) -> None:
 def test_query_filters_by_resource_id(metering_app: Any) -> None:
     client = TestClient(metering_app.app)
     client.get("/healthz")
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     for i in range(3):
         client.post(
             "/usage",
@@ -111,7 +110,7 @@ def test_query_filters_by_resource_id(metering_app: Any) -> None:
 def test_query_time_window(metering_app: Any) -> None:
     client = TestClient(metering_app.app)
     client.get("/healthz")
-    base = datetime(2026, 5, 22, 12, 0, 0, tzinfo=timezone.utc)
+    base = datetime(2026, 5, 22, 12, 0, 0, tzinfo=UTC)
     for i in range(5):
         client.post(
             "/usage",

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
-
 from sovereign.security import require_bearer
 
 from .conftest import AUTH_HEADER

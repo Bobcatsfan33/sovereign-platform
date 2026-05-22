@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from pydantic import ValidationError
-
 from sovereign.models import (
     AuditEvent,
     Binding,
@@ -33,7 +32,7 @@ class TestAuditEvent:
         assert e.ts.tzinfo is not None
 
     def test_full_payload(self) -> None:
-        when = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        when = datetime(2026, 1, 1, tzinfo=UTC)
         e = AuditEvent(
             ts=when,
             tenant_id="acme",

@@ -13,7 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 from moto import mock_aws
 
-from .conftest import AUTH_HEADER, BEARER
+from .conftest import BEARER
 
 
 @pytest.fixture
@@ -65,12 +65,10 @@ def _broker_creds() -> tuple[str, str]:
 @mock_aws
 def test_catalog_requires_auth(broker_app: Any) -> None:
     client = TestClient(broker_app.app)
-    r = client.get("/v2/catalog")
-    # Broker uses HTTP Basic per OSB spec — no creds returns either
-    # an empty body or 401 depending on auth dependency. The current
-    # auth dependency lets missing creds through so the broker can
-    # be probed; with creds the catalog returns.
-    # Sanity: with valid creds we get the catalog.
+    # The OSB-style auth dependency permits missing creds (so health probes
+    # can hit the catalog) but rejects wrong creds — see the dedicated
+    # test_invalid_basic_creds_rejected for the rejection path. Here we
+    # just verify the happy path with valid creds.
     r2 = client.get("/v2/catalog", auth=_broker_creds())
     assert r2.status_code == 200
     services = r2.json()["services"]

@@ -1,8 +1,24 @@
+import logging
 import os
 from functools import lru_cache
 
+logger = logging.getLogger("sovereign.settings")
+
+
+# Sentinel values that indicate a development default rather than a real
+# secret. If any of these are still in effect when ENV=production, startup
+# logs a loud warning so misconfigurations are visible.
+_DEV_SENTINELS: dict[str, str] = {
+    "dev_bearer_token": "dev-token",
+    "broker_password": "broker",
+    "s3_secret_key": "minioadmin",
+}
+
 
 class Settings:
+    # Environment marker — "dev" locally, "production" in real deployments.
+    env: str = os.getenv("ENV", "dev")
+
     # Cloud / object store
     aws_region: str = os.getenv("AWS_REGION", "us-east-1")
     dynamodb_endpoint: str | None = os.getenv("DYNAMODB_ENDPOINT")
@@ -36,4 +52,15 @@ class Settings:
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    s = Settings()
+    if s.env.lower() in {"production", "prod"}:
+        live = [k for k, v in _DEV_SENTINELS.items() if getattr(s, k, None) == v]
+        if live:
+            logger.error(
+                "Sovereign Platform started with ENV=%s but dev defaults are "
+                "still active for: %s. Inject real secrets via the secret "
+                "manager before serving traffic.",
+                s.env,
+                ", ".join(live),
+            )
+    return s

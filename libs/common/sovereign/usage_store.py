@@ -37,12 +37,13 @@ def _event_id(usage: Usage) -> str:
 class UsageStore:
     def __init__(self) -> None:
         s = get_settings()
+        # Boto3's standard credential chain — env vars in dev (set to
+        # 'local' for DynamoDB Local in .env.example), IAM role in
+        # production. No hardcoded secrets.
         self._ddb = boto3.resource(
             "dynamodb",
             region_name=s.aws_region,
             endpoint_url=s.dynamodb_endpoint,
-            aws_access_key_id="local",
-            aws_secret_access_key="local",
         )
         self._table = self._ddb.Table(USAGE_TABLE)
 
@@ -90,9 +91,6 @@ class UsageStore:
 
         DynamoDB does the tenant+time range scan natively via the sort key;
         resource filters are applied in Python on the returned page."""
-        # Time-bounded sort-key range. Event IDs start with the ISO timestamp,
-        # so lexicographic comparison matches temporal ordering.
-        key_conditions: dict[str, Any] = {"tenant_id": tenant_id}
         kwargs: dict[str, Any] = {"Limit": min(max(limit, 1), 1000), "ScanIndexForward": False}
 
         # Time-bounded sort-key range. event_id is "{ts.isoformat()}#{resource_id}#{rand}".
@@ -128,7 +126,7 @@ class UsageStore:
         records: list[Usage] = []
         for item in response.get("Items", []):
             payload = item.get("payload")
-            if not payload:
+            if not isinstance(payload, str | bytes | bytearray):
                 continue
             usage = Usage.model_validate(json.loads(payload))
             if resource_id is not None and usage.resource_id != resource_id:

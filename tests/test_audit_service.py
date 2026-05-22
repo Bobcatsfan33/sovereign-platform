@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import UTC
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-
 from sovereign.models import AuditEvent
 
 from .conftest import AUTH_HEADER
@@ -178,7 +178,7 @@ class TestGetEvents:
     def test_all_filter_columns_make_it_into_sql(
         self, audit_app: tuple[Any, FakeClickHouseClient]
     ) -> None:
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         app, fake = audit_app
         client = TestClient(app)
@@ -188,8 +188,8 @@ class TestGetEvents:
             "action": "instance.provisioned",
             "resource": "svc/demo",
             "decision": "allow",
-            "since": datetime(2026, 1, 1, tzinfo=timezone.utc).isoformat(),
-            "until": datetime(2026, 12, 31, tzinfo=timezone.utc).isoformat(),
+            "since": datetime(2026, 1, 1, tzinfo=UTC).isoformat(),
+            "until": datetime(2026, 12, 31, tzinfo=UTC).isoformat(),
         }
         r = client.get("/events", params=params, headers=AUTH_HEADER)
         assert r.status_code == 200

@@ -1,19 +1,24 @@
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+
 import boto3
 from botocore.exceptions import ClientError
-from .models import ServiceInstance, Binding
+
+from .models import Binding, ServiceInstance
 from .settings import get_settings
+
 
 class Store:
     def __init__(self):
         s = get_settings()
+        # Credentials come from boto3's standard credential chain — env
+        # vars in dev (AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY, set to
+        # 'local' in .env.example for DynamoDB Local), IAM role in
+        # production. No hardcoded secrets.
         self.ddb = boto3.resource(
             "dynamodb",
             region_name=s.aws_region,
             endpoint_url=s.dynamodb_endpoint,
-            aws_access_key_id="local",
-            aws_secret_access_key="local",
         )
         self.instances = self.ddb.Table("sovereign_instances")
         self.bindings = self.ddb.Table("sovereign_bindings")
@@ -44,7 +49,7 @@ class Store:
             return None
 
     def put_instance(self, instance: ServiceInstance):
-        instance.updated_at = datetime.now(timezone.utc).isoformat()
+        instance.updated_at = datetime.now(UTC).isoformat()
         self.instances.put_item(Item={"instance_id": instance.instance_id, "payload": instance.model_dump_json()})
 
     def delete_instance(self, instance_id: str):

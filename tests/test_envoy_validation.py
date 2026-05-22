@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 import yaml
 from pydantic import ValidationError
-
 from sovereign.envoy_v3 import EnvoyBootstrap, validate_bootstrap
 from sovereign.models import Cluster, LbParameters, Listener, Route, ServiceInstance
 from sovereign.render import RenderValidationError, _build_doc, render_envoy

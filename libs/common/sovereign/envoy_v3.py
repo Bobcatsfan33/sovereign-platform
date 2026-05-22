@@ -82,7 +82,7 @@ class RouteRule(_EnvoyModel):
     direct_response: DirectResponse | None = None
 
     @model_validator(mode="after")
-    def _exactly_one_action(self) -> "RouteRule":
+    def _exactly_one_action(self) -> RouteRule:
         # `route` and `direct_response` are mutually exclusive — exactly one
         # must be set per Envoy v3 RouteRule.
         if self.route is None and self.direct_response is None:

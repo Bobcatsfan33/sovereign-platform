@@ -17,7 +17,6 @@ from typing import Any
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import Depends, FastAPI, HTTPException, Response, status
-
 from sovereign.audit import Audit
 from sovereign.errors import install_problem_detail_handlers
 from sovereign.models import RenderRequest

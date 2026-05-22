@@ -27,14 +27,11 @@ def _build_doc(instance: ServiceInstance) -> dict[str, Any]:
     params = instance.parameters
     listeners: list[dict[str, Any]] = []
     for listener in params.listeners:
-        domains = sorted(list({r.host for r in params.routes})) or ["*"]
-        routes = (
-            [
-                {"match": {"prefix": r.prefix}, "route": {"cluster": r.cluster}}
-                for r in params.routes
-            ]
-            or [{"match": {"prefix": "/"}, "direct_response": {"status": 404}}]
-        )
+        domains = sorted({r.host for r in params.routes}) or ["*"]
+        routes: list[dict[str, Any]] = [
+            {"match": {"prefix": r.prefix}, "route": {"cluster": r.cluster}}
+            for r in params.routes
+        ] or [{"match": {"prefix": "/"}, "direct_response": {"status": 404}}]
         listeners.append(
             {
                 "name": listener.name,
