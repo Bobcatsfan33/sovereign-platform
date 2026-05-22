@@ -4,16 +4,37 @@ services:
       context: .
       dockerfile: apps/broker/Dockerfile
     env_file: .env
+    environment:
+      SERVICE_NAME: broker
     ports: ["8080:8080"]
-    depends_on: [dynamodb-local, minio, clickhouse, control-plane]
+    depends_on:
+      dynamodb-local: {condition: service_started}
+      minio:          {condition: service_started}
+      control-plane:  {condition: service_started}
+      audit-service:  {condition: service_started}
 
   control-plane:
     build:
       context: .
       dockerfile: apps/control-plane/Dockerfile
     env_file: .env
+    environment:
+      SERVICE_NAME: control-plane
     ports: ["8090:8090"]
-    depends_on: [dynamodb-local, minio, clickhouse]
+    depends_on:
+      minio:          {condition: service_started}
+      audit-service:  {condition: service_started}
+
+  audit-service:
+    build:
+      context: .
+      dockerfile: apps/audit-service/Dockerfile
+    env_file: .env
+    environment:
+      SERVICE_NAME: audit-service
+    ports: ["8086:8086"]
+    depends_on:
+      clickhouse:     {condition: service_started}
 
   dynamodb-local:
     image: amazon/dynamodb-local:latest
