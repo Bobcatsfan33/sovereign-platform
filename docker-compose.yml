@@ -8,10 +8,11 @@ services:
       SERVICE_NAME: broker
     ports: ["8080:8080"]
     depends_on:
-      dynamodb-local: {condition: service_started}
-      minio:          {condition: service_started}
-      control-plane:  {condition: service_started}
-      audit-service:  {condition: service_started}
+      dynamodb-local:    {condition: service_started}
+      minio:             {condition: service_started}
+      control-plane:     {condition: service_started}
+      audit-service:     {condition: service_started}
+      metering-service:  {condition: service_started}
 
   control-plane:
     build:
@@ -35,6 +36,17 @@ services:
     ports: ["8086:8086"]
     depends_on:
       clickhouse:     {condition: service_started}
+
+  metering-service:
+    build:
+      context: .
+      dockerfile: apps/metering-service/Dockerfile
+    env_file: .env
+    environment:
+      SERVICE_NAME: metering-service
+    ports: ["8087:8087"]
+    depends_on:
+      dynamodb-local: {condition: service_started}
 
   dynamodb-local:
     image: amazon/dynamodb-local:latest
