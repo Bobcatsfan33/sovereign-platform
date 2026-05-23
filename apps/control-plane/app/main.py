@@ -1,12 +1,14 @@
 """Sovereign Platform — Envoy control plane.
 
-Renders Envoy v3 configs from instance specs and persists them as
-immutable artifacts in S3. Serves the rendered config to Envoy hosts on
-demand.
+Phase 1 refactor: the /render endpoint now dispatches through the
+renderer registry rather than calling Envoy code directly. The control
+plane is a thin HTTP shell that knows how to do registry lookup, call
+render -> validate -> apply, and surface the result. Adding a new
+service type means registering a new BaseRenderer — no edits here.
 
-Task 0.5 hardening: JSON problem detail on errors. The /get-config
-endpoint now returns raw YAML with the correct content-type rather than
-JSON-wrapped YAML. S3 failures translate to 503 with a structured body.
+Phase 0 hardening (RFC 7807 problem detail, bearer auth on /render,
+raw-YAML response on get_config, graceful 503 on S3 failure) is
+preserved.
 """
 
 from __future__ import annotations
@@ -20,17 +22,23 @@ from fastapi import Depends, FastAPI, HTTPException, Response, status
 from sovereign.audit import Audit
 from sovereign.errors import install_problem_detail_handlers
 from sovereign.models import RenderRequest
-from sovereign.render import RenderValidationError, render_envoy
+from sovereign.render import RenderValidationError
+from sovereign.renderers import register_renderer, registry
+from sovereign.renderers.envoy import EnvoyRenderer
 from sovereign.security import require_bearer
 from sovereign.settings import get_settings
 
 logger = logging.getLogger("control-plane")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
-app = FastAPI(title="Sovereign Platform — Envoy Control Plane", version="0.1.0")
+app = FastAPI(title="Sovereign Platform — Envoy Control Plane", version="0.2.0")
 install_problem_detail_handlers(app, service_name="control-plane")
 
 audit = Audit(service="control-plane")
+
+# Register the chassis-shipped renderers. Service packs do the same on
+# their own import; see Phase 1 task 1.9 (pack registration system).
+register_renderer(EnvoyRenderer())
 
 
 def _s3_client() -> Any:
@@ -58,53 +66,84 @@ def startup() -> None:
 
 
 @app.get("/healthz")
-def healthz() -> dict[str, str]:
-    return {"status": "ok", "service": "control-plane"}
+def healthz() -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "service": "control-plane",
+        "renderers": registry.service_types(),
+    }
 
 
 @app.post("/render", dependencies=[Depends(require_bearer)])
-def render(req: RenderRequest) -> dict[str, Any]:
-    s = get_settings()
+async def render(req: RenderRequest) -> dict[str, Any]:
+    """Look up the renderer by `instance.service_id`, run render →
+    validate → apply, and surface the result. Backward-compatible
+    response shape `{bucket, key, version}` for the broker."""
+    instance = req.instance
     try:
-        body = render_envoy(req.instance)
+        renderer = registry.require(instance.service_id)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"no renderer for service_type {instance.service_id!r}",
+        ) from exc
+
+    try:
+        artifact = await renderer.render(instance)
     except RenderValidationError as exc:
-        # The rendered doc failed Envoy v3 schema validation. Refuse to
-        # write it to S3 — surface the structured error to the caller so
-        # they can correct the request (or report the template bug).
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(exc),
         ) from exc
-    key = f"instances/{req.instance.instance_id}/v{req.instance.version}/envoy.yaml"
-    try:
-        _s3_client().put_object(
-            Bucket=s.config_bucket,
-            Key=key,
-            Body=body.encode(),
-            ContentType="application/x-yaml",
+
+    vr = await renderer.validate(artifact)
+    if not vr.ok:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"artifact validation failed: {vr.errors}",
         )
-    except (ClientError, BotoCoreError) as exc:
+
+    ar = await renderer.apply(artifact)
+    if not ar.ok:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"object store unavailable: {exc}",
-        ) from exc
+            detail=f"apply failed at step {ar.failed_step.kind if ar.failed_step else '?'}: {ar.detail}",
+        )
+
+    # Backward-compat response — broker has been asserting on this shape
+    # since the Phase 0 lifecycle tests. The s3-put step's target IS the
+    # key the broker stores in binding credentials.
+    s = get_settings()
+    s3_step = next((step for step in ar.applied_steps if step.kind == "s3-put"), None)
+    key = s3_step.target if s3_step else f"instances/{instance.instance_id}/v{instance.version}/envoy.yaml"
 
     audit.emit(
         "config.rendered",
-        req.instance.instance_id,
+        instance.instance_id,
         details=key,
-        metadata={"version": req.instance.version, "bucket": s.config_bucket},
+        metadata={
+            "service_type": artifact.service_type,
+            "version": artifact.version,
+            "bucket": s.config_bucket,
+            **artifact.metadata,
+        },
     )
-    return {"bucket": s.config_bucket, "key": key, "version": req.instance.version}
+
+    return {
+        "bucket": s.config_bucket,
+        "key": key,
+        "version": artifact.version,
+        "service_type": artifact.service_type,
+        "manifest": [step.model_dump() for step in ar.applied_steps],
+    }
 
 
 @app.get("/instances/{instance_id}/versions/{version}/envoy.yaml")
 def get_config(instance_id: str, version: int) -> Response:
     """Return the rendered Envoy YAML for the given instance + version.
-
-    Returns raw YAML with `application/x-yaml` so Envoy hosts can consume
-    it directly — previously the str return type caused FastAPI to JSON-
-    encode the body, breaking real Envoy clients."""
+    Renderer-agnostic file serving comes later in Phase 1; this route
+    stays Envoy-specific for backward compatibility with the existing
+    binding `config_url`."""
     s = get_settings()
     key = f"instances/{instance_id}/v{version}/envoy.yaml"
     try:
