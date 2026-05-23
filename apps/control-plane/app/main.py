@@ -22,6 +22,7 @@ from fastapi import Depends, FastAPI, HTTPException, Response, status
 from sovereign.audit import Audit
 from sovereign.errors import install_problem_detail_handlers
 from sovereign.models import RenderRequest
+from sovereign.packs import discover_packs, registered_packs
 from sovereign.render import RenderValidationError
 from sovereign.renderers import register_renderer, registry
 from sovereign.renderers.envoy import EnvoyRenderer
@@ -54,6 +55,9 @@ def _s3_client() -> Any:
 
 @app.on_event("startup")
 def startup() -> None:
+    # Discover packs first so the control plane can dispatch to pack
+    # renderers, not just the chassis Envoy renderer.
+    discover_packs()
     s = get_settings()
     try:
         client = _s3_client()
@@ -71,6 +75,7 @@ def healthz() -> dict[str, Any]:
         "status": "ok",
         "service": "control-plane",
         "renderers": registry.service_types(),
+        "packs": registered_packs(),
     }
 
 

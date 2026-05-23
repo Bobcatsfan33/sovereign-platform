@@ -37,6 +37,7 @@ from sovereign.models import (
     ServiceInstance,
     UpdateRequest,
 )
+from sovereign.packs import discover_packs, registered_packs
 from sovereign.renderers import register_renderer
 from sovereign.renderers import registry as renderer_registry
 
@@ -126,6 +127,9 @@ def startup() -> None:
         store.ensure_tables()
     except Exception:  # noqa: BLE001
         logger.exception("ensure_tables failed at startup; will retry on first request")
+    # Discover and register every installed pack BEFORE seeding the
+    # catalog so the seed sees pack-supplied renderers/connectors.
+    discover_packs()
     _seed_catalog()
 
 
@@ -136,6 +140,7 @@ def healthz() -> dict[str, Any]:
         "service": "broker",
         "renderers": renderer_registry.service_types(),
         "connectors": connector_registry.connector_types(),
+        "packs": registered_packs(),
     }
 
 
