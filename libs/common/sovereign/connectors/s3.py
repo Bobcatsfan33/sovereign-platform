@@ -15,6 +15,7 @@ from typing import Any, ClassVar
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 
+from ..catalog import ConnectorCatalogEntry, ParameterSchema
 from .base import BaseConnector
 from .types import (
     ConnectionResult,
@@ -30,6 +31,54 @@ logger = logging.getLogger("sovereign.connectors.s3")
 
 class S3Connector(BaseConnector):
     connector_type: ClassVar[str] = "s3"
+
+    @classmethod
+    def catalog_entry(cls) -> ConnectorCatalogEntry:
+        return ConnectorCatalogEntry(
+            connector_type=cls.connector_type,
+            name="s3",
+            description="AWS S3 and S3-compatible object stores (MinIO, on-prem).",
+            pack="chassis",
+            capabilities=["list", "ingest", "stream", "iam-role"],
+            config_schema=ParameterSchema(
+                schema={
+                    "type": "object",
+                    "oneOf": [
+                        {
+                            "type": "object",
+                            "required": ["kind", "data"],
+                            "properties": {
+                                "kind": {"const": "aws_access_key"},
+                                "data": {
+                                    "type": "object",
+                                    "required": ["access_key_id", "secret_access_key"],
+                                    "properties": {
+                                        "access_key_id": {"type": "string"},
+                                        "secret_access_key": {"type": "string"},
+                                        "region": {"type": "string"},
+                                        "endpoint_url": {"type": "string"},
+                                    },
+                                },
+                            },
+                        },
+                        {
+                            "type": "object",
+                            "required": ["kind", "data"],
+                            "properties": {
+                                "kind": {"const": "aws_iam_role"},
+                                "data": {
+                                    "type": "object",
+                                    "properties": {
+                                        "region": {"type": "string"},
+                                        "endpoint_url": {"type": "string"},
+                                    },
+                                },
+                            },
+                        },
+                    ],
+                }
+            ),
+        )
 
     def __init__(self) -> None:
         self._client: Any = None

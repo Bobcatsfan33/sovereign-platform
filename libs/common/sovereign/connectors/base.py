@@ -16,7 +16,7 @@ instance per (credentials, target) pair.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from .types import (
     ConnectionResult,
@@ -26,6 +26,9 @@ from .types import (
     IngestResult,
     ResourceDescriptor,
 )
+
+if TYPE_CHECKING:
+    from ..catalog import ConnectorCatalogEntry
 
 
 class BaseConnector(ABC):
@@ -65,6 +68,12 @@ class BaseConnector(ABC):
         reachability. Called by the connector watchdog (Phase 3+) and
         surfaced on /healthz of services that use this connector."""
         raise NotImplementedError
+
+    @classmethod
+    def catalog_entry(cls) -> ConnectorCatalogEntry | None:
+        """Optional catalog metadata. Override to appear in the public
+        connector catalog."""
+        return None
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)

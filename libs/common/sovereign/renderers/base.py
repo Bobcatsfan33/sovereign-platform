@@ -13,7 +13,7 @@ packs (`InferenceEndpointRenderer`, `SiemWorkspaceRenderer`, ...).
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from ..models import ServiceInstance
 from .artifact import (
@@ -22,6 +22,9 @@ from .artifact import (
     TeardownResult,
     ValidationResult,
 )
+
+if TYPE_CHECKING:
+    from ..catalog import ServiceCatalogEntry
 
 
 class BaseRenderer(ABC):
@@ -61,6 +64,14 @@ class BaseRenderer(ABC):
         on deprovision. Best-effort: a non-fatal failure is logged but
         does not block the deprovision response."""
         raise NotImplementedError
+
+    @classmethod
+    def catalog_entry(cls) -> ServiceCatalogEntry | None:
+        """Optional catalog metadata. Override in subclasses that should
+        appear in `GET /v2/catalog`. Returning None hides the service
+        type from the public catalog (useful for system/internal types
+        a pack uses but does not surface to end users)."""
+        return None
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)

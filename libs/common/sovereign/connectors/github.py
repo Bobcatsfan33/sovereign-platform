@@ -17,6 +17,7 @@ import boto3
 import httpx
 from botocore.exceptions import BotoCoreError, ClientError
 
+from ..catalog import ConnectorCatalogEntry, ParameterSchema
 from .base import BaseConnector
 from .types import (
     ConnectionResult,
@@ -32,6 +33,41 @@ logger = logging.getLogger("sovereign.connectors.github")
 
 class GitHubConnector(BaseConnector):
     connector_type: ClassVar[str] = "github"
+
+    @classmethod
+    def catalog_entry(cls) -> ConnectorCatalogEntry:
+        return ConnectorCatalogEntry(
+            connector_type=cls.connector_type,
+            name="github",
+            description="GitHub.com and GitHub Enterprise — list repos, ingest files.",
+            pack="chassis",
+            capabilities=["list", "ingest", "github-enterprise"],
+            config_schema=ParameterSchema(
+                schema={
+                    "type": "object",
+                    "required": ["kind", "data"],
+                    "properties": {
+                        "kind": {"const": "github_pat"},
+                        "data": {
+                            "type": "object",
+                            "required": ["token"],
+                            "properties": {
+                                "token": {
+                                    "type": "string",
+                                    "description": "Personal access token; classic or fine-grained.",
+                                },
+                                "host": {
+                                    "type": "string",
+                                    "description": "API host. github.com -> 'api.github.com'; "
+                                    "GHE -> 'github.example.gov/api/v3'.",
+                                    "default": "api.github.com",
+                                },
+                            },
+                        },
+                    },
+                }
+            ),
+        )
 
     def __init__(self, transport: httpx.BaseTransport | None = None) -> None:
         # Tests inject `transport` (httpx.MockTransport) without touching

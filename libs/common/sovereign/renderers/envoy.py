@@ -22,6 +22,7 @@ import yaml
 from botocore.exceptions import BotoCoreError, ClientError
 from pydantic import ValidationError
 
+from ..catalog import ParameterSchema, ServiceCatalogEntry, ServicePlan
 from ..envoy_v3 import validate_bootstrap
 from ..models import ServiceInstance
 from ..render import RenderValidationError, _build_doc
@@ -55,6 +56,97 @@ def _key_for(instance_id: str, version: int, filename: str = "envoy.yaml") -> st
 
 class EnvoyRenderer(BaseRenderer):
     service_type: ClassVar[str] = "sovereign-envoy-lb"
+
+    @classmethod
+    def catalog_entry(cls) -> ServiceCatalogEntry:
+        # JSON Schema for an LB provisioning request body. The broker
+        # validates incoming /v2/service_instances/{id} requests against
+        # this; the UI builds the wizard from the same schema.
+        param_schema = {
+            "type": "object",
+            "required": ["listeners", "clusters"],
+            "additionalProperties": False,
+            "properties": {
+                "region": {"type": "string", "default": "us-east-1"},
+                "mtls_enabled": {"type": "boolean", "default": False},
+                "sidecar_mode": {"type": "boolean", "default": False},
+                "tags": {
+                    "type": "object",
+                    "additionalProperties": {"type": "string"},
+                    "default": {},
+                },
+                "listeners": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                        "type": "object",
+                        "required": ["name", "port"],
+                        "properties": {
+                            "name": {"type": "string"},
+                            "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+                            "protocol": {"type": "string", "default": "HTTP"},
+                        },
+                    },
+                },
+                "routes": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "required": ["host", "cluster"],
+                        "properties": {
+                            "host": {"type": "string"},
+                            "prefix": {"type": "string", "default": "/"},
+                            "cluster": {"type": "string"},
+                        },
+                    },
+                },
+                "clusters": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                        "type": "object",
+                        "required": ["name", "endpoints"],
+                        "properties": {
+                            "name": {"type": "string"},
+                            "endpoints": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": {"type": "string"},
+                            },
+                        },
+                    },
+                },
+            },
+        }
+        return ServiceCatalogEntry(
+            service_type=cls.service_type,
+            name="sovereign-envoy-lb",
+            description="Self-service Envoy-based regional or multi-region load balancer.",
+            bindable=True,
+            tags=["network", "load-balancer", "envoy"],
+            pack="chassis",
+            plans=[
+                ServicePlan(
+                    id="standard-regional",
+                    name="standard-regional",
+                    description="Single-region Envoy pool, t-shirt size: small.",
+                    metadata={"tshirt": "small", "regions": 1},
+                ),
+                ServicePlan(
+                    id="multi-region",
+                    name="multi-region",
+                    description="Active-active Envoy pools across multiple regions.",
+                    metadata={"tshirt": "medium", "regions": "N"},
+                ),
+                ServicePlan(
+                    id="sidecar",
+                    name="sidecar",
+                    description="App-local Envoy sidecar for east-west traffic.",
+                    metadata={"tshirt": "small", "topology": "sidecar"},
+                ),
+            ],
+            parameter_schema=ParameterSchema(schema=param_schema),
+        )
 
     async def render(self, instance: ServiceInstance) -> RenderedArtifact:
         # Reuse Phase-0 build + validate so behaviour is bit-for-bit

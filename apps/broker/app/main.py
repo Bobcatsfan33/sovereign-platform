@@ -1,16 +1,15 @@
 """Sovereign Platform — Open Service Broker (OSB v2 API).
 
-Implements the OSB lifecycle: catalog, provision, update, deprovision,
-bind, unbind, last_operation. Persists state in DynamoDB via the shared
-Store class, asks the control plane to render config snapshots into S3,
-and emits audit events to the dedicated audit service.
+Phase 1 update: the catalog is now read from the DynamoDB-backed
+CatalogStore (task 1.7). On startup, the broker walks the renderer and
+connector registries and persists each component's `catalog_entry()`
+into the store. Packs added later via the pack registration system
+(task 1.9) appear in `/v2/catalog` automatically — the route reads
+from DynamoDB, no broker code change needed.
 
-Task 0.5 hardening: every endpoint returns RFC 7807 JSON problem detail
-on error. Downstream failures (DynamoDB, control plane, audit) translate
-to 503 with a descriptive body rather than 500 with a stacktrace. OSB
-semantics: deprovision is idempotent (410 Gone for a missing instance),
-provision is idempotent (returns the existing instance on re-PUT),
-unknown instances on update/bind return 404.
+Phase 0 hardening is preserved: RFC 7807 problem detail on every
+endpoint, idempotent OSB semantics (410 on deprovision-missing,
+already_exists on reprovision), graceful 503 on downstream failure.
 """
 
 from __future__ import annotations
@@ -24,6 +23,10 @@ from botocore.exceptions import ClientError
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from sovereign.audit import Audit
+from sovereign.catalog import CatalogStore
+from sovereign.connectors import registry as connector_registry
+from sovereign.connectors.github import GitHubConnector  # noqa: F401
+from sovereign.connectors.s3 import S3Connector  # noqa: F401
 from sovereign.errors import install_problem_detail_handlers
 from sovereign.models import (
     Binding,
@@ -34,44 +37,37 @@ from sovereign.models import (
     ServiceInstance,
     UpdateRequest,
 )
+from sovereign.renderers import register_renderer
+from sovereign.renderers import registry as renderer_registry
+
+# Importing these modules has the side effect of pre-registering the
+# chassis renderers + connectors into their registries. Pack discovery
+# (task 1.9) adds more entries via a discovery scan at startup.
+from sovereign.renderers.envoy import EnvoyRenderer  # noqa: F401  (side-effect import)
 from sovereign.settings import get_settings
 from sovereign.store import Store
+
+# EnvoyRenderer is registered in the control-plane process. The broker
+# also needs it in its own registry for catalog seeding (the broker
+# never calls renderer.render itself — that happens in the control
+# plane — but it needs the catalog_entry() metadata).
+register_renderer(EnvoyRenderer())
 
 logger = logging.getLogger("broker")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
-app = FastAPI(title="Sovereign Platform — OSB Broker", version="0.1.0")
+app = FastAPI(title="Sovereign Platform — OSB Broker", version="0.2.0")
 install_problem_detail_handlers(app, service_name="broker")
 
 security = HTTPBasic(auto_error=False)
 store = Store()
+catalog = CatalogStore()
 audit = Audit(service="broker")
-
-CATALOG: dict[str, Any] = {
-    "services": [
-        {
-            "id": "sovereign-envoy-lb",
-            "name": "sovereign-envoy-lb",
-            "description": "Self-service Envoy-based regional/multi-region load balancer",
-            "bindable": True,
-            "plans": [
-                {"id": "standard-regional", "name": "standard-regional", "description": "Regional Envoy pool"},
-                {"id": "multi-region", "name": "multi-region", "description": "Active-active regional Envoy pools"},
-                {"id": "sidecar", "name": "sidecar", "description": "App-local sidecar load balancing"},
-            ],
-        }
-    ]
-}
 
 
 def auth(creds: HTTPBasicCredentials | None = Depends(security)) -> None:
-    """OSB-compliant HTTP Basic. Cloud Foundry-style clients require this;
-    we'll layer Bearer on internal endpoints in a later task."""
     s = get_settings()
     if creds is None:
-        # OSB allows unauthenticated catalog probes per cf clients; the
-        # other endpoints carry their own auth checks. The original
-        # behaviour permits a None — preserved here.
         return
     if not (
         secrets.compare_digest(creds.username, s.broker_username)
@@ -80,28 +76,132 @@ def auth(creds: HTTPBasicCredentials | None = Depends(security)) -> None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid credentials")
 
 
+def _seed_catalog() -> None:
+    """Walk the renderer + connector registries and upsert each
+    component's catalog_entry() into the DynamoDB catalog. Idempotent —
+    calling repeatedly is safe and is how packs get re-discovered on
+    broker restart."""
+    try:
+        catalog.ensure_table()
+    except Exception:  # noqa: BLE001
+        logger.exception("catalog ensure_table failed; will retry on next startup")
+        return
+
+    services = 0
+    for service_type in renderer_registry.service_types():
+        renderer = renderer_registry.get(service_type)
+        if renderer is None:
+            continue
+        entry = type(renderer).catalog_entry()
+        if entry is None:
+            continue
+        try:
+            catalog.put_service(entry)
+            services += 1
+        except Exception:  # noqa: BLE001
+            logger.exception("failed to seed service catalog entry for %s", service_type)
+
+    connectors = 0
+    for connector_type in connector_registry.connector_types():
+        cls = connector_registry.get(connector_type)
+        if cls is None:
+            continue
+        entry = cls.catalog_entry()
+        if entry is None:
+            continue
+        try:
+            catalog.put_connector(entry)
+            connectors += 1
+        except Exception:  # noqa: BLE001
+            logger.exception("failed to seed connector catalog entry for %s", connector_type)
+
+    logger.info(
+        "catalog seeded: %d service entries, %d connector entries", services, connectors
+    )
+
+
 @app.on_event("startup")
 def startup() -> None:
     try:
         store.ensure_tables()
     except Exception:  # noqa: BLE001
         logger.exception("ensure_tables failed at startup; will retry on first request")
+    _seed_catalog()
 
 
 @app.get("/healthz")
-def healthz() -> dict[str, str]:
-    return {"status": "ok", "service": "broker"}
+def healthz() -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "service": "broker",
+        "renderers": renderer_registry.service_types(),
+        "connectors": connector_registry.connector_types(),
+    }
 
 
 @app.get("/v2/catalog", dependencies=[Depends(auth)])
-def catalog() -> dict[str, Any]:
-    return CATALOG
+def get_catalog() -> dict[str, Any]:
+    """Return the persisted service catalog in OSB v2 shape. Two
+    extensions over the OSB minimum:
+      - `connectors`: the parallel connector catalog so the UI can
+        list both in one round-trip.
+      - `parameter_schema` and `tags` on each service.
+    """
+    try:
+        services = catalog.list_services()
+        connectors = catalog.list_connectors()
+    except RuntimeError as exc:
+        # Catalog table missing or query failed — degrade to whatever
+        # the in-memory registries advertise so an empty DynamoDB
+        # doesn't break the OSB clients.
+        logger.warning("catalog read failed (%s); falling back to live registries", exc)
+        services = [
+            e
+            for st in renderer_registry.service_types()
+            for r in [renderer_registry.get(st)]
+            if r is not None
+            for e in [type(r).catalog_entry()]
+            if e is not None
+        ]
+        connectors = [
+            e
+            for ct in connector_registry.connector_types()
+            for cls in [connector_registry.get(ct)]
+            if cls is not None
+            for e in [cls.catalog_entry()]
+            if e is not None
+        ]
+
+    return {
+        "services": [
+            {
+                "id": e.service_type,
+                "name": e.name,
+                "description": e.description,
+                "bindable": e.bindable,
+                "tags": e.tags,
+                "metadata": {**e.metadata, "pack": e.pack},
+                "plans": [p.model_dump() for p in e.plans],
+                "parameter_schema": e.parameter_schema.model_dump(by_alias=True),
+            }
+            for e in services
+        ],
+        "connectors": [
+            {
+                "id": e.connector_type,
+                "name": e.name,
+                "description": e.description,
+                "metadata": {**e.metadata, "pack": e.pack},
+                "capabilities": e.capabilities,
+                "config_schema": e.config_schema.model_dump(by_alias=True),
+            }
+            for e in connectors
+        ],
+    }
 
 
 async def render(instance: ServiceInstance) -> dict[str, Any]:
-    """Ask the control plane to render this instance's Envoy config and
-    persist it to object storage. Failures are surfaced as 503 to the
-    OSB client so they distinguish from broker bugs (500)."""
+    """Ask the control plane to render this instance's config artifact."""
     s = get_settings()
     try:
         async with httpx.AsyncClient(timeout=10) as client:
@@ -140,13 +240,11 @@ async def provision(instance_id: str, req: ProvisionRequest) -> dict[str, Any]:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"state store unavailable: {exc}"
         ) from exc
 
-    artifact = await render(inst)  # may raise 503 itself
+    artifact = await render(inst)
     inst.status = InstanceStatus.succeeded
     try:
         store.put_instance(inst)
     except ClientError as exc:
-        # The rendered artifact is durable — surface the persistence
-        # failure but don't lose the artifact.
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"state store unavailable after render: {exc}",
@@ -184,9 +282,6 @@ async def update(instance_id: str, req: UpdateRequest) -> dict[str, Any]:
 
 @app.delete("/v2/service_instances/{instance_id}", dependencies=[Depends(auth)])
 def deprovision(instance_id: str) -> dict[str, Any]:
-    """OSB deprovision is idempotent. Returns 200 with empty body when
-    the instance is present and successfully removed; returns 410 Gone
-    when the instance is already absent (per OSB spec §4.6)."""
     inst = store.get_instance(instance_id)
     if not inst:
         raise HTTPException(status_code=status.HTTP_410_GONE, detail="instance already absent")
