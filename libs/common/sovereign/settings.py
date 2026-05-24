@@ -10,6 +10,7 @@ logger = logging.getLogger("sovereign.settings")
 # logs a loud warning so misconfigurations are visible.
 _DEV_SENTINELS: dict[str, str] = {
     "dev_bearer_token": "dev-token",
+    "dev_jwt_secret": "dev-jwt-secret-replace-me-with-a-real-one",
     "broker_password": "broker",
     "s3_secret_key": "minioadmin",
 }
@@ -46,6 +47,12 @@ class Settings:
     broker_username: str = os.getenv("BROKER_USERNAME", "broker")
     broker_password: str = os.getenv("BROKER_PASSWORD", "broker")
     dev_bearer_token: str = os.getenv("DEV_BEARER_TOKEN", "dev-token")
+
+    # HS256 JWT secret for tenant-aware Phase-3 authorization. Real
+    # deployments swap in JWKS-based verification against the agency IdP
+    # via the OIDC integration in task 3.5; this default exists only so
+    # docker-compose + tests work out of the box.
+    dev_jwt_secret: str = os.getenv("DEV_JWT_SECRET", "dev-jwt-secret-replace-me-with-a-real-one")
 
     # Service identity — every service reports its own name to the audit
     # service so the trail says which component emitted the event.

@@ -17,6 +17,7 @@ dependencies = [
   "clickhouse-connect>=0.7",
   "python-dotenv>=1.0",
   "PyYAML>=6.0",
+  "PyJWT[crypto]>=2.8",
 ]
 
 [project.optional-dependencies]
