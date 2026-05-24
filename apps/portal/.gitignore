@@ -1,0 +1,12 @@
+node_modules/
+dist/
+coverage/
+.vite/
+.eslintcache
+*.log
+.DS_Store
+
+# Local environment files (VITE_BROKER_URL etc. for non-dev hosts).
+.env
+.env.local
+.env.*.local

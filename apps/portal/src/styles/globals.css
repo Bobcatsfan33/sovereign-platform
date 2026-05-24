@@ -1,0 +1,37 @@
+@import "tailwindcss";
+
+/* WCAG 2.1 AA — the skip-link target needs visible focus when the user
+   tabs to it; default Tailwind focus rings are sufficient but we set
+   the link itself off-screen until focused. */
+.skip-link {
+  position: absolute;
+  left: -10000px;
+  top: auto;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+}
+.skip-link:focus {
+  position: fixed;
+  top: 1rem;
+  left: 1rem;
+  width: auto;
+  height: auto;
+  padding: 0.5rem 1rem;
+  background: white;
+  color: #1e3a8a;
+  border: 2px solid #1e3a8a;
+  z-index: 50;
+}
+
+/* prefers-reduced-motion respects user's OS-level animation preference,
+   suppressing transitions that could trigger vestibular issues. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
