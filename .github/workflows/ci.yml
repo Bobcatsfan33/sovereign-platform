@@ -161,7 +161,7 @@ jobs:
       # or high CVE so vulnerable images never reach :latest. A SARIF
       # report uploads as a CI artefact for the continuous monitor.
       - name: trivy scan (fail on critical/high)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@0.36.0
         with:
           image-ref: ${{ env.REGISTRY }}/${{ steps.img.outputs.prefix }}-${{ matrix.service }}:${{ github.sha }}
           format: sarif
