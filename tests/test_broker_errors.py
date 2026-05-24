@@ -36,6 +36,7 @@ def _broker_creds() -> tuple[str, str]:
 def broker_with_render(broker_module: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
     """Broker with a working fake render and audit, used to test
     downstream-store failure modes."""
+    from sovereign.models import PolicyDecision
 
     async def fake_render(instance: Any) -> dict[str, Any]:
         return {"bucket": "b", "key": f"instances/{instance.instance_id}/v1/envoy.yaml", "version": 1}
@@ -44,8 +45,13 @@ def broker_with_render(broker_module: Any, monkeypatch: pytest.MonkeyPatch) -> A
         def emit(self, *args: Any, **kwargs: Any) -> None:
             return None
 
+    class FakePolicy:
+        def evaluate(self, _input: Any) -> PolicyDecision:
+            return PolicyDecision(allow=True, denies=[], matched_layers=[])
+
     monkeypatch.setattr(broker_module, "render", fake_render)
     monkeypatch.setattr(broker_module, "audit", FakeAudit())
+    monkeypatch.setattr(broker_module, "policy", FakePolicy())
     return broker_module
 
 
@@ -120,11 +126,18 @@ def test_control_plane_unavailable_returns_503(
     """When the control plane is unreachable from the broker, provision
     should surface 503 with a clear detail rather than 500."""
 
+    from sovereign.models import PolicyDecision
+
     class FakeAudit:
         def emit(self, *args: Any, **kwargs: Any) -> None:
             return None
 
+    class FakePolicy:
+        def evaluate(self, _input: Any) -> PolicyDecision:
+            return PolicyDecision(allow=True, denies=[], matched_layers=[])
+
     monkeypatch.setattr(broker_module, "audit", FakeAudit())
+    monkeypatch.setattr(broker_module, "policy", FakePolicy())
 
     # Restore the real render() so we can exercise its error-handling
     # branch. Override httpx.AsyncClient to a mock transport that fails.

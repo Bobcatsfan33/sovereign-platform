@@ -18,9 +18,10 @@ from .conftest import BEARER
 
 @pytest.fixture
 def broker_app(broker_module: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
-    """Patch out the broker's outbound dependencies (control-plane render
-    and audit emit) so the lifecycle tests exercise the broker's own state
-    machine without standing up the other services."""
+    """Patch out the broker's outbound dependencies (control-plane render,
+    audit emit, OPA policy) so the lifecycle tests exercise the broker's
+    own state machine without standing up the other services."""
+    from sovereign.models import PolicyDecision
 
     rendered: list[str] = []
 
@@ -37,6 +38,15 @@ def broker_app(broker_module: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
             emitted.append((action, resource))
 
     monkeypatch.setattr(broker_module, "audit", FakeAudit())
+
+    # Default the policy engine to allow-all so lifecycle tests focus on
+    # OSB state-machine behaviour. test_policy.py covers the policy gate
+    # specifically with allow/deny scenarios.
+    class FakePolicy:
+        def evaluate(self, _input: Any) -> PolicyDecision:
+            return PolicyDecision(allow=True, denies=[], matched_layers=[])
+
+    monkeypatch.setattr(broker_module, "policy", FakePolicy())
 
     broker_module._test_rendered = rendered  # type: ignore[attr-defined]
     broker_module._test_emitted = emitted  # type: ignore[attr-defined]

@@ -115,11 +115,21 @@ class PolicyRequest(BaseModel):
 
 class PolicyDecision(BaseModel):
     """Output of the policy engine. `obligations` are side-effects the
-    caller must honor (e.g. PII redaction, logging, human approval)."""
+    caller must honor (e.g. PII redaction, logging, human approval).
+
+    Phase 2 fields:
+        denies          per-rule reasons that caused the deny. Empty when
+                        `allow` is true. Each entry cites a control id
+                        (e.g. "SC-8: TLS must be enabled on ...").
+        matched_layers  which policy layers contributed denies
+                        ("base", "pack:ai-pack", "tenant:agency-x").
+    """
 
     allow: bool
     reason: str = ""
     obligations: list[str] = Field(default_factory=list)
+    denies: list[str] = Field(default_factory=list)
+    matched_layers: list[str] = Field(default_factory=list)
 
 
 class Usage(BaseModel):

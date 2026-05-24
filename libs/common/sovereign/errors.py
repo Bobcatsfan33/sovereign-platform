@@ -39,7 +39,10 @@ def _problem(
         "type": type_,
         "title": title,
         "status": status,
-        "detail": detail if isinstance(detail, str) else str(detail),
+        # If the caller passes a dict/list/etc as detail, preserve it
+        # structurally so JSON-aware clients can parse it. Strings stay
+        # strings; everything else is JSON-serialised as-is.
+        "detail": detail if isinstance(detail, str | dict | list) else str(detail),
     }
     if service:
         body["service"] = service

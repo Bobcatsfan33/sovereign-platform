@@ -32,12 +32,14 @@ from sovereign.models import (
     Binding,
     BindRequest,
     InstanceStatus,
+    PolicyDecision,
     ProvisionRequest,
     RenderRequest,
     ServiceInstance,
     UpdateRequest,
 )
 from sovereign.packs import discover_packs, registered_packs
+from sovereign.policy import PolicyClient, build_policy_input
 from sovereign.renderers import register_renderer
 from sovereign.renderers import registry as renderer_registry
 
@@ -64,17 +66,74 @@ security = HTTPBasic(auto_error=False)
 store = Store()
 catalog = CatalogStore()
 audit = Audit(service="broker")
+policy = PolicyClient()
 
 
-def auth(creds: HTTPBasicCredentials | None = Depends(security)) -> None:
+def auth(creds: HTTPBasicCredentials | None = Depends(security)) -> str:
+    """OSB-style HTTP Basic auth. Returns the authenticated principal name
+    for policy + audit use. None creds are tolerated (anonymous probe);
+    invalid creds are rejected."""
     s = get_settings()
     if creds is None:
-        return
+        return "anonymous"
     if not (
         secrets.compare_digest(creds.username, s.broker_username)
         and secrets.compare_digest(creds.password, s.broker_password)
     ):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid credentials")
+    return creds.username
+
+
+def _evaluate_policy(
+    *,
+    actor: str,
+    instance_id: str,
+    service_type: str,
+    plan_id: str,
+    parameters: dict[str, Any],
+    tenant_id: str,
+    action: str,
+) -> PolicyDecision:
+    """Call OPA and emit a `policy.evaluated` audit event with the
+    decision (task 2.7). On deny, raises 403 with the denies surfaced
+    in the problem-detail body. On allow, returns the decision so the
+    caller can attach the matched_layers to its own audit emission."""
+    policy_input = build_policy_input(
+        actor=actor,
+        tenant_id=tenant_id,
+        service_type=service_type,
+        plan_id=plan_id,
+        parameters=parameters,
+    )
+    decision = policy.evaluate(policy_input)
+
+    # Every evaluation — allow or deny — lands in the audit trail.
+    # This IS the continuous compliance evidence the auditor reads.
+    audit.emit(
+        "policy.evaluated",
+        f"{action}:{instance_id}",
+        actor=actor,
+        tenant_id=tenant_id,
+        decision="allow" if decision.allow else "deny",
+        metadata={
+            "service_type": service_type,
+            "plan_id": plan_id,
+            "denies": decision.denies,
+            "matched_layers": decision.matched_layers,
+            "action": action,
+        },
+    )
+
+    if not decision.allow:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "message": "policy rejected the request",
+                "denies": decision.denies,
+                "matched_layers": decision.matched_layers,
+            },
+        )
+    return decision
 
 
 def _seed_catalog() -> None:
@@ -225,8 +284,10 @@ async def render(instance: ServiceInstance) -> dict[str, Any]:
         ) from exc
 
 
-@app.put("/v2/service_instances/{instance_id}", status_code=201, dependencies=[Depends(auth)])
-async def provision(instance_id: str, req: ProvisionRequest) -> dict[str, Any]:
+@app.put("/v2/service_instances/{instance_id}", status_code=201)
+async def provision(
+    instance_id: str, req: ProvisionRequest, principal: str = Depends(auth)
+) -> dict[str, Any]:
     try:
         existing = store.get_instance(instance_id)
     except ClientError as exc:
@@ -236,6 +297,19 @@ async def provision(instance_id: str, req: ProvisionRequest) -> dict[str, Any]:
 
     if existing:
         return {"dashboard_url": f"/dashboard/{instance_id}", "operation": "already_exists"}
+
+    # Tenant id comes from organization_guid (OSB v2); Phase 3 tenancy
+    # replaces this with the OIDC-derived org claim.
+    tenant_id = req.organization_guid or "default"
+    _evaluate_policy(
+        actor=principal,
+        instance_id=instance_id,
+        service_type=req.service_id,
+        plan_id=req.plan_id,
+        parameters=req.parameters.model_dump(mode="json"),
+        tenant_id=tenant_id,
+        action="provision",
+    )
 
     inst = ServiceInstance(instance_id=instance_id, **req.model_dump())
     try:
@@ -259,16 +333,38 @@ async def provision(instance_id: str, req: ProvisionRequest) -> dict[str, Any]:
         "instance.provisioned",
         instance_id,
         details=str(artifact),
+        actor=principal,
+        tenant_id=tenant_id,
         metadata={"service_id": inst.service_id, "plan_id": inst.plan_id},
     )
     return {"dashboard_url": f"/dashboard/{instance_id}", "operation": "provisioned", "config": artifact}
 
 
-@app.patch("/v2/service_instances/{instance_id}", dependencies=[Depends(auth)])
-async def update(instance_id: str, req: UpdateRequest) -> dict[str, Any]:
+@app.patch("/v2/service_instances/{instance_id}")
+async def update(
+    instance_id: str, req: UpdateRequest, principal: str = Depends(auth)
+) -> dict[str, Any]:
     inst = store.get_instance(instance_id)
     if not inst:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
+    tenant_id = inst.organization_guid or "default"
+
+    # Build a tentative-next-state parameters dict so the policy sees
+    # what the instance WOULD be after the patch, not the prior state.
+    next_params = inst.parameters.model_dump(mode="json")
+    if req.parameters is not None:
+        next_params = req.parameters.model_dump(mode="json")
+    next_plan = req.plan_id or inst.plan_id
+    _evaluate_policy(
+        actor=principal,
+        instance_id=instance_id,
+        service_type=inst.service_id,
+        plan_id=next_plan,
+        parameters=next_params,
+        tenant_id=tenant_id,
+        action="update",
+    )
+
     if req.plan_id:
         inst.plan_id = req.plan_id
     if req.parameters:
@@ -280,6 +376,8 @@ async def update(instance_id: str, req: UpdateRequest) -> dict[str, Any]:
         "instance.updated",
         instance_id,
         details=str(artifact),
+        actor=principal,
+        tenant_id=tenant_id,
         metadata={"version": inst.version},
     )
     return {"operation": "updated", "config": artifact}

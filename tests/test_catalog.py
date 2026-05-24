@@ -166,14 +166,21 @@ def test_github_connector_catalog_entry_shape() -> None:
 def broker_with_seeded_catalog(broker_module: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
     """The broker_module fixture loads broker/app/main, which imports
     the renderers + connectors (side-effect registration). The startup
-    hook then seeds the catalog. We just need an outbound stub for
-    render() so provision tests still work without a real control plane."""
+    hook then seeds the catalog. We just need outbound stubs for
+    render() / audit / policy so provision tests still work without a
+    real control plane / OPA."""
+    from sovereign.models import PolicyDecision
 
     class FakeAudit:
         def emit(self, *args: Any, **kwargs: Any) -> None:
             return None
 
+    class FakePolicy:
+        def evaluate(self, _input: Any) -> PolicyDecision:
+            return PolicyDecision(allow=True, denies=[], matched_layers=[])
+
     monkeypatch.setattr(broker_module, "audit", FakeAudit())
+    monkeypatch.setattr(broker_module, "policy", FakePolicy())
     return broker_module
 
 
