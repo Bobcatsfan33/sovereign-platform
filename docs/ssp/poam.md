@@ -1,0 +1,54 @@
+# Plan of Action and Milestones (POA&M)
+
+> Phase 5 task 5.6. Documents the known gaps between the chassis as
+> shipped and the full Moderate-baseline expectation. Each item carries
+> a severity, an owner, a target date, and the source (SSP control,
+> assessor finding, security test result, or roadmap task).
+
+Severity scale:
+
+- **High** — gap blocks production use at Moderate baseline.
+- **Medium** — gap reduces evidence quality or operational posture but
+  has a documented compensating control.
+- **Low** — gap is cosmetic, future-hardening, or only relevant under
+  the High overlay.
+
+## Open items
+
+| ID | Severity | Title | Source | Owner | Target | Status |
+| --- | --- | --- | --- | --- | --- | --- |
+| 5.2-A | Medium | Replace per-broker Basic-auth throttling with a front-door rate-limit policy | AC-7 | Platform Ops | 2026-Q3 | open — relies on agency LB |
+| 5.2-B | Low | Wire ClickHouse alert on policy-deny spike per principal | AC-2(11) (High overlay) | Platform Ops | 2026-Q4 | open |
+| 5.2-C | Low | Document ClickHouse `TTL` per agency in IaC samples | AU-11 | Platform Ops | 2026-Q3 | open |
+| 5.2-D | Medium | Sign audit rows with a service-account key for AU-10 non-repudiation | AU-10 (High overlay) | Platform Eng | 2026-Q4 | open |
+| 5.2-E | Low | Mandate security-reviewer agent pass on every PR | CM-3(7) (High overlay) | Platform Eng | 2026-Q3 | open |
+| 5.2-F | Medium | Enforce OIDC `nonce` on implicit-flow login | IA-2(8) | Platform Eng | 2026-Q3 | open |
+| 5.2-G | Medium | Add Rego rule requiring `amr` claim includes `mfa` for state-changing actions | IA-2(11) (High overlay) | Platform Eng | 2026-Q4 | open |
+| 5.2-H | Medium | Cosign all container images at build, verify at admission | SI-7(1)+(6) (High overlay) | Platform Ops | 2026-Q3 | open |
+| 5.4-A | Medium | Switch chassis container base from `python:3.11-slim` to a FIPS-validated Python build | SC-13, IA-7 | Platform Eng | 2026-Q4 | open |
+| 5.4-B | Low | Pin `openpolicyagent/opa` image to a specific tag (currently `:latest-rootless`) | SA-22 | Platform Eng | 2026-Q3 | open |
+| 0.5-A | Low | Replace deprecated FastAPI `@on_event("startup")` with lifespan handlers | SI-2 (technical debt) | Platform Eng | 2026-Q3 | open — warning, not failure |
+| 1.7-A | Low | Add DynamoDB GSI on `organization_guid` for `list_instances` (current code scans + filters) | CM-8 performance | Platform Eng | 2026-Q4 | open — fine while inventory < 10k |
+| 3.5-A | Medium | Cache JWKS responses with an explicit max-age + a soft-fail path | IA-2 availability | Platform Eng | 2026-Q3 | open |
+
+## Closed items
+
+| ID | Closed in | Notes |
+| --- | --- | --- |
+| 0.1 | 2026-05-23 (commit `09a9c1b`) | Repo consolidation; governance models merged. |
+| 0.2 | 2026-05-23 (commit `017de99`) | Dedicated audit service replaced inline ClickHouse coupling. |
+| 0.5 | 2026-05-23 (commit `9033eee`) | RFC 7807 problem detail across every endpoint. |
+| 0.6 | 2026-05-23 (commit `6072ea0`) | Pydantic Envoy-v3 validation gate before S3 write. |
+| 0.7 | 2026-05-23 (commit `9fbb0d3`) | Hardcoded credentials removed; production sentinel check added. |
+| 2.* | 2026-05-23 (commits `cb624ae` + `2bd7e2b`) | Policy engine, layered decision, broker gate, decision audit. |
+| 3.* | 2026-05-23 (commits `2ff6b88` / `4075e85` / `18473b6`) | Tenancy, RBAC, JWT, OIDC, quota. |
+| 4.* | 2026-05-24 (commits `e6d78c7` / `99a7be5`) | Portal SPA + broker portal endpoints + axe-clean a11y. |
+
+## How an assessor uses this file
+
+1. Read the open items table top-to-bottom; each row maps to a control
+   and a code-side or process-side remediation.
+2. For each item, follow the linked control chapter to see what
+   evidence currently exists and what's missing.
+3. Items rated High block an authority-to-operate at Moderate baseline.
+   There are currently zero High items.
