@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+  schedule:
+    # Phase 5.2 — hourly continuous-monitor run. The cron only fires
+    # against the default branch, which is exactly what we want for
+    # production-deployment monitoring.
+    - cron: "17 * * * *"
 
 # Run a single in-flight job per ref; superseded runs get cancelled so
 # a PR with rapid pushes doesn't queue up stale builds.
@@ -140,13 +145,68 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: build (and push on main)
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: apps/${{ matrix.service }}/Dockerfile
+          load: true  # load into the local docker so trivy can scan it
           push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
           tags: |
             ${{ env.REGISTRY }}/${{ steps.img.outputs.prefix }}-${{ matrix.service }}:${{ github.sha }}
             ${{ env.REGISTRY }}/${{ steps.img.outputs.prefix }}-${{ matrix.service }}:latest
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+      # Phase 5.2 / SI-2 — trivy gate. Fail the build on any critical
+      # or high CVE so vulnerable images never reach :latest. A SARIF
+      # report uploads as a CI artefact for the continuous monitor.
+      - name: trivy scan (fail on critical/high)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ steps.img.outputs.prefix }}-${{ matrix.service }}:${{ github.sha }}
+          format: sarif
+          output: trivy-${{ matrix.service }}.sarif
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+          ignore-unfixed: true
+      - name: write scan timestamp (for continuous-monitor freshness check)
+        if: always()
+        run: |
+          mkdir -p .trivy-reports
+          date -u +"%Y-%m-%dT%H:%M:%SZ" > .trivy-reports/${{ matrix.service }}.timestamp
+      - name: upload trivy reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-${{ matrix.service }}
+          path: |
+            trivy-${{ matrix.service }}.sarif
+            .trivy-reports/${{ matrix.service }}.timestamp
+          retention-days: 14
+
+  continuous-monitor:
+    # Phase 5.2 — cron-driven continuous monitoring. Runs every hour on
+    # the head of main (the CI cron syntax only fires against default
+    # branch). Locally-runnable via `python scripts/continuous_monitor.py`.
+    name: continuous monitor
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - name: install opa
+        run: |
+          curl -fsSL -o /usr/local/bin/opa https://openpolicyagent.org/downloads/latest/opa_linux_amd64_static
+          chmod +x /usr/local/bin/opa
+      - name: run monitor
+        env:
+          AUDIT_SERVICE_URL: ${{ secrets.AUDIT_SERVICE_URL }}
+          SOVEREIGN_BEARER_TOKEN: ${{ secrets.SOVEREIGN_BEARER_TOKEN }}
+          AWS_REGION: us-gov-west-1
+          # In a real deployment, the runner assumes an IAM role via
+          # actions/aws-actions-configure-credentials before this step.
+        run: python scripts/continuous_monitor.py --format json

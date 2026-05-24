@@ -53,6 +53,9 @@ services:
     # Static SPA served by nginx. Built from apps/portal/ — the build args
     # bake the user-facing API URLs (the browser, not the container,
     # talks to the broker, so we point at localhost:8080 here).
+    # Phase 5.4: container nginx now listens on :8080 (non-privileged
+    # so it can run as the unprivileged `nginx` user); we still publish
+    # on host port 8088.
     build:
       context: .
       dockerfile: apps/portal/Dockerfile
@@ -60,7 +63,7 @@ services:
         VITE_BROKER_URL: "http://localhost:8080"
         VITE_AUDIT_URL: "http://localhost:8086"
         VITE_DEV_BEARER_TOKEN: "dev-token"
-    ports: ["8088:80"]
+    ports: ["8088:8080"]
     depends_on:
       broker:        {condition: service_started}
       audit-service: {condition: service_started}
@@ -83,7 +86,10 @@ services:
     ports: ["8123:8123", "9002:9000"]
 
   opa:
-    image: openpolicyagent/opa:latest-rootless
+    # Phase 5.4 — pinned OPA image tag (was :latest-rootless; closes
+    # POA&M 5.4-B). The `-rootless` variant runs OPA as a non-root
+    # user out of the box.
+    image: openpolicyagent/opa:1.6.0-rootless
     # Run in server mode with policies loaded from the mounted bundle.
     # Phase 2 ships sovereign.base.*; service packs add their own
     # bundles by mounting additional volumes or shipping a bundle URL

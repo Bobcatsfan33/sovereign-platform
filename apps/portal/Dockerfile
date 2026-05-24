@@ -1,5 +1,7 @@
 ## Stage 1 — build the SPA bundle ─────────────────────────────────────
-FROM node:22-alpine AS build
+# Phase 5.4 STIG hardening: pinned node + nginx tags, non-root nginx
+# user, OCI labels, healthcheck, hardened response headers (nginx.conf).
+FROM node:22.13.0-alpine AS build
 WORKDIR /portal
 
 # Cache deps independent of source changes.
@@ -7,8 +9,6 @@ COPY apps/portal/package.json apps/portal/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 
 COPY apps/portal/ ./
-# Build-time API endpoints. Defaults work for local docker-compose;
-# production sets these to the real broker / audit hostnames.
 ARG VITE_BROKER_URL=
 ARG VITE_AUDIT_URL=
 ARG VITE_DEV_BEARER_TOKEN=dev-token
@@ -18,12 +18,30 @@ ENV VITE_DEV_BEARER_TOKEN=${VITE_DEV_BEARER_TOKEN}
 RUN npm run build
 
 ## Stage 2 — serve the static bundle ──────────────────────────────────
-FROM nginx:1.27-alpine
+# `nginx:1.27-alpine` ships an `nginx` non-root user but the default
+# config still binds :80 (privileged). We rebind to :8080 inside the
+# container and let the orchestrator publish on :8088 externally —
+# matches docker-compose port mapping.
+FROM nginx:1.27.4-alpine
+
+LABEL org.opencontainers.image.title="sovereign-platform-portal" \
+      org.opencontainers.image.description="Sovereign Platform self-service catalog SPA (React/TS)" \
+      org.opencontainers.image.source="https://github.com/Bobcatsfan33/sovereign-platform" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.vendor="Sovereign Platform"
+
 COPY apps/portal/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /portal/dist /usr/share/nginx/html
 
-# React Router uses HTML5 history, so 404s on deep links must fall
-# back to /index.html. nginx.conf takes care of it.
-EXPOSE 80
+# Make nginx's runtime paths writable by the unprivileged user.
+RUN chown -R nginx:nginx /usr/share/nginx/html /var/cache/nginx /var/log/nginx \
+ && touch /var/run/nginx.pid \
+ && chown nginx:nginx /var/run/nginx.pid \
+ # Drop the default privileged listener and run on 8080 inside the container.
+ && sed -i 's/listen 80;/listen 8080;/' /etc/nginx/conf.d/default.conf
+
+USER nginx
+EXPOSE 8080
+
 HEALTHCHECK --interval=15s --timeout=3s --start-period=5s --retries=3 \
-  CMD wget -q -O- http://localhost/ > /dev/null 2>&1 || exit 1
+  CMD wget -q -O- http://localhost:8080/ > /dev/null 2>&1 || exit 1
