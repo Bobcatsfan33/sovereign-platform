@@ -13,6 +13,7 @@ services:
       control-plane:     {condition: service_started}
       audit-service:     {condition: service_started}
       metering-service:  {condition: service_started}
+      opa:               {condition: service_started}
 
   control-plane:
     build:
@@ -64,3 +65,20 @@ services:
   clickhouse:
     image: clickhouse/clickhouse-server:latest
     ports: ["8123:8123", "9002:9000"]
+
+  opa:
+    image: openpolicyagent/opa:latest-rootless
+    # Run in server mode with policies loaded from the mounted bundle.
+    # Phase 2 ships sovereign.base.*; service packs add their own
+    # bundles by mounting additional volumes or shipping a bundle URL
+    # in production deployments.
+    command:
+      - "run"
+      - "--server"
+      - "--addr=:8181"
+      - "--log-level=info"
+      - "--log-format=json"
+      - "/policies"
+    volumes:
+      - ./policies:/policies:ro
+    ports: ["8181:8181"]

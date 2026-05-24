@@ -37,6 +37,8 @@ class Settings:
     control_plane_url: str = os.getenv("CONTROL_PLANE_URL", "http://localhost:8090")
     audit_service_url: str = os.getenv("AUDIT_SERVICE_URL", "http://localhost:8086")
     metering_service_url: str = os.getenv("METERING_SERVICE_URL", "http://localhost:8087")
+    opa_url: str = os.getenv("OPA_URL", "http://localhost:8181")
+    opa_decision_path: str = os.getenv("OPA_DECISION_PATH", "v1/data/sovereign/decision")
 
     # Auth — basic creds for the broker's OSB API (Cloud Foundry style) and
     # a shared bearer token for inter-service calls. Both default for dev;
