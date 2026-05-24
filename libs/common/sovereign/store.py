@@ -55,6 +55,37 @@ class Store:
     def delete_instance(self, instance_id: str):
         self.instances.delete_item(Key={"instance_id": instance_id})
 
+    def list_instances(
+        self,
+        *,
+        organization_guid: str | None = None,
+        limit: int = 200,
+    ) -> list[ServiceInstance]:
+        """Return up to `limit` instances visible to the caller.
+
+        DynamoDB has no native filter on JSON payload fields, so we scan
+        and filter in Python. This is fine while volumes are small; once
+        instances grow beyond ~10k a GSI on organization_guid will be
+        added (Phase 5 work). The scan is bounded by `limit` so the cost
+        is predictable."""
+        items: list[ServiceInstance] = []
+        kwargs: dict = {"Limit": min(max(limit, 1), 1000)}
+        try:
+            response = self.instances.scan(**kwargs)
+        except ClientError:
+            return []
+        for row in response.get("Items", []):
+            payload = row.get("payload")
+            if not isinstance(payload, str | bytes | bytearray):
+                continue
+            inst = ServiceInstance.model_validate(json.loads(payload))
+            if organization_guid is not None and inst.organization_guid != organization_guid:
+                continue
+            items.append(inst)
+            if len(items) >= limit:
+                break
+        return items
+
     def put_binding(self, binding: Binding):
         self.bindings.put_item(Item={"binding_id": binding.binding_id, "payload": binding.model_dump_json()})
 

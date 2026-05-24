@@ -12,10 +12,12 @@ The base chassis grew out of a clean-room Open Service Broker implementation —
 
 | Service | Port | Purpose |
 | --- | --- | --- |
-| `broker` | 8080 | OSB v2 API — catalog, provision, bind, update, deprovision, last_operation. HTTP Basic per spec. |
+| `broker` | 8080 | OSB v2 API — catalog, provision, bind, update, deprovision, last_operation, /v2/instances, /v2/policy/check. HTTP Basic + Bearer. |
 | `control-plane` | 8090 | Renders Envoy v3 configs and persists them to S3. Bearer auth. |
 | `audit-service` | 8086 | Single ingestion point for `AuditEvent`s. ClickHouse-backed, in-process buffer for graceful degradation. Bearer auth. |
 | `metering-service` | 8087 | DynamoDB-backed `Usage` records. Tenant-scoped query API. Bearer auth. |
+| `opa` | 8181 | Open Policy Agent — evaluates `sovereign.decision` against the layered base/pack/tenant Rego bundle in `policies/`. |
+| `portal` | 8088 | Sovereign Portal — static React/TS SPA: catalog browse, provisioning wizard with policy pre-check, instance dashboard, compliance dashboard. Talks to broker + audit-service from the browser via CORS. |
 
 Each service exposes `/healthz` unauthenticated for compose / K8s probes.
 

@@ -25,11 +25,13 @@ import httpx
 from botocore.exceptions import ClientError
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from pydantic import BaseModel, Field
 from sovereign.audit import Audit
 from sovereign.catalog import CatalogStore
 from sovereign.connectors import registry as connector_registry
 from sovereign.connectors.github import GitHubConnector  # noqa: F401
 from sovereign.connectors.s3 import S3Connector  # noqa: F401
+from sovereign.cors import install_cors
 from sovereign.errors import install_problem_detail_handlers
 from sovereign.metering import Metering
 from sovereign.models import (
@@ -69,8 +71,9 @@ register_renderer(EnvoyRenderer())
 logger = logging.getLogger("broker")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
-app = FastAPI(title="Sovereign Platform — OSB Broker", version="0.3.0")
+app = FastAPI(title="Sovereign Platform — OSB Broker", version="0.4.0")
 install_problem_detail_handlers(app, service_name="broker")
+install_cors(app)
 
 security = HTTPBasic(auto_error=False)
 store = Store()
@@ -687,3 +690,61 @@ def get_usage(tenant_id: str, caller: Caller = Depends(state_change_identify)) -
         "tenant_id": tenant_id,
         "entries": [e.model_dump() for e in summary],
     }
+
+
+@app.get("/v2/instances")
+def list_instances(
+    tenant_id: str | None = None,
+    limit: int = 200,
+    caller: Caller = Depends(identify),
+) -> dict[str, Any]:
+    """List service instances. The portal (Phase 4) calls this for the
+    Instances dashboard. RBAC: JWT callers see only instances inside
+    tenants they can `read` (tenant filter is required for them);
+    Basic-auth callers (system tooling) see everything."""
+    if not caller.is_basic:
+        if tenant_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="tenant_id query parameter is required for JWT callers",
+            )
+        _enforce_rbac(caller, tenant_id=tenant_id, action=ACTION_READ)
+    instances = store.list_instances(organization_guid=tenant_id, limit=limit)
+    return {
+        "instances": [i.model_dump(mode="json") for i in instances],
+        "count": len(instances),
+    }
+
+
+# ── Policy what-if check (Phase 4 wizard pre-check) ──────────────────
+
+
+class PolicyCheckBody(BaseModel):
+    """Input to /v2/policy/check. The portal wizard calls this to show
+    the user the policy verdict BEFORE they submit. The endpoint does
+    NOT persist state and does NOT emit an audit event (the real
+    provision call later in the flow will emit its own policy.evaluated
+    record per Phase 2.7) — auditing every keystroke would drown the
+    trail in noise."""
+
+    service_id: str
+    plan_id: str
+    tenant_id: str
+    parameters: dict[str, Any] = Field(default_factory=dict)
+
+
+@app.post("/v2/policy/check")
+def policy_check(
+    body: PolicyCheckBody, caller: Caller = Depends(identify)
+) -> dict[str, Any]:
+    actor = caller.user.principal
+    decision = policy.evaluate(
+        build_policy_input(
+            actor=actor,
+            tenant_id=body.tenant_id,
+            service_type=body.service_id,
+            plan_id=body.plan_id,
+            parameters=body.parameters,
+        )
+    )
+    return decision.model_dump(mode="json")

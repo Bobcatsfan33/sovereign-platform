@@ -80,11 +80,39 @@ jobs:
           path: coverage.xml
           retention-days: 7
 
+  portal:
+    name: portal (typecheck + lint + test + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/portal
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/portal/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm run lint
+      - name: vitest (includes jest-axe a11y assertions)
+        run: npm test
+      - name: production build
+        run: npm run build
+      - name: upload built bundle
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: portal-dist
+          path: apps/portal/dist
+          retention-days: 7
+
   docker-build:
-    # Build the four base-chassis service images on every PR so a broken
-    # Dockerfile never lands on main. Push to GHCR only on main.
+    # Build the chassis service images on every PR so a broken Dockerfile
+    # never lands on main. Push to GHCR only on main.
     name: docker build (${{ matrix.service }})
-    needs: [lint, typecheck, test, policy-test]
+    needs: [lint, typecheck, test, policy-test, portal]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -92,7 +120,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [broker, control-plane, audit-service, metering-service]
+        service: [broker, control-plane, audit-service, metering-service, portal]
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3

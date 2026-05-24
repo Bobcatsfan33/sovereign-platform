@@ -64,6 +64,14 @@ class Settings:
     # service so the trail says which component emitted the event.
     service_name: str = os.getenv("SERVICE_NAME", "unknown")
 
+    # CORS allow-list for browser-facing services (broker + audit). Comma-
+    # separated origin URLs; empty allows the dev defaults below only.
+    # Production sets this to the portal's deployed origin(s).
+    portal_origins: str = os.getenv(
+        "PORTAL_ORIGINS",
+        "http://localhost:5173,http://localhost:4173,http://localhost:8088",
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:
