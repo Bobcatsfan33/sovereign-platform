@@ -3,13 +3,18 @@
 # OCI labels, healthcheck. The audit-service is the only chassis
 # component that talks to ClickHouse directly; everything else goes
 # through this service.
-FROM python:3.11.10-slim-bookworm
+FROM python:3.11-slim-bookworm
 
 LABEL org.opencontainers.image.title="sovereign-platform-audit-service" \
       org.opencontainers.image.description="Dedicated audit ingestion service (ClickHouse-backed)" \
       org.opencontainers.image.source="https://github.com/Bobcatsfan33/sovereign-platform" \
       org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.vendor="Sovereign Platform"
+
+RUN apt-get update \
+ && apt-get -y --no-install-recommends upgrade \
+ && apt-get clean \
+ && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd --system --gid 1000 sovereign \
  && useradd  --system --uid 1000 --gid sovereign --shell /usr/sbin/nologin --create-home sovereign

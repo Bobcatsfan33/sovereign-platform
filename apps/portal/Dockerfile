@@ -30,6 +30,10 @@ LABEL org.opencontainers.image.title="sovereign-platform-portal" \
       org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.vendor="Sovereign Platform"
 
+# Refresh Alpine packages so the runtime layer picks up the latest
+# security patches available at build time.
+RUN apk --no-cache upgrade
+
 COPY apps/portal/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /portal/dist /usr/share/nginx/html
 

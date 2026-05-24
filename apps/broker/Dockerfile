@@ -5,13 +5,22 @@
 #     before CMD so the runtime can never elevate.
 #   - OCI labels for image provenance + vulnerability tracking.
 #   - HEALTHCHECK so the container orchestrator surfaces broken instances.
-FROM python:3.11.10-slim-bookworm
+FROM python:3.11-slim-bookworm
 
 LABEL org.opencontainers.image.title="sovereign-platform-broker" \
       org.opencontainers.image.description="Open Service Broker API for the Sovereign Platform" \
       org.opencontainers.image.source="https://github.com/Bobcatsfan33/sovereign-platform" \
       org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.vendor="Sovereign Platform"
+
+# Pull patched system packages on top of the base image so trivy CVE
+# scans pass on the freshly-built artefact (the upstream Python image
+# is rebuilt periodically; running apt-upgrade closes the gap between
+# its build date and ours).
+RUN apt-get update \
+ && apt-get -y --no-install-recommends upgrade \
+ && apt-get clean \
+ && rm -rf /var/lib/apt/lists/*
 
 # Non-root system user. UID/GID 1000 is intentional so file ownership
 # round-trips cleanly when developers bind-mount source during dev.

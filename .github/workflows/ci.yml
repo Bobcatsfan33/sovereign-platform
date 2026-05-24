@@ -162,8 +162,11 @@ jobs:
       # report uploads as a CI artefact for the continuous monitor.
       - name: trivy scan (fail on critical/high)
         # Upstream tags all have the 'v' prefix
-        # (git ls-remote --tags aquasecurity/trivy-action); previous
+        # (git ls-remote --tags aquasecurity/trivy-action); a previous
         # commit hit `unable to find version` because I dropped it.
+        # The .trivyignore file at the repo root is an audit-logged
+        # allow-list of CVEs that don't reach the chassis runtime —
+        # each entry carries justification + a POA&M cross-reference.
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ env.REGISTRY }}/${{ steps.img.outputs.prefix }}-${{ matrix.service }}:${{ github.sha }}
@@ -172,6 +175,7 @@ jobs:
           severity: CRITICAL,HIGH
           exit-code: "1"
           ignore-unfixed: true
+          trivyignores: .trivyignore
       - name: write scan timestamp (for continuous-monitor freshness check)
         if: always()
         run: |

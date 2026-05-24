@@ -26,7 +26,11 @@ Severity scale:
 | 5.2-G | Medium | Add Rego rule requiring `amr` claim includes `mfa` for state-changing actions | IA-2(11) (High overlay) | Platform Eng | 2026-Q4 | open |
 | 5.2-H | Medium | Cosign all container images at build, verify at admission | SI-7(1)+(6) (High overlay) | Platform Ops | 2026-Q3 | open |
 | 5.4-A | Medium | Switch chassis container base from `python:3.11-slim` to a FIPS-validated Python build | SC-13, IA-7 | Platform Eng | 2026-Q4 | open |
-| 5.4-B | Low | Pin `openpolicyagent/opa` image to a specific tag (currently `:latest-rootless`) | SA-22 | Platform Eng | 2026-Q3 | open |
+| 5.4-B | Low | Pin `openpolicyagent/opa` image to a specific tag (currently `:latest-rootless`) | SA-22 | Platform Eng | 2026-Q3 | closed — pinned `openpolicyagent/opa:1.6.0-rootless` in commit `c403194` |
+| 5.4-CVE-OPENSSL | Medium | 7 OpenSSL CVEs (CVE-2025-15467, CVE-2025-69421, CVE-2026-28387 .. -28390, CVE-2026-31789) ignored in `.trivyignore` pending Debian point-release availability | SC-13, SI-2 | Platform Eng | 2026-Q3 | open — quarterly review next 2026-08 |
+| 5.4-CVE-GNUTLS | Medium | 7 GnuTLS CVEs ignored in `.trivyignore`; gnutls is not linked by any chassis service | SC-13, SI-2 | Platform Eng | 2026-Q3 | open — quarterly review next 2026-08 |
+| 5.4-CVE-MISC | Low | 10 system-package CVEs (gnupg, libcap, sqlite, xz, pam, perl, setuptools, wheel) ignored in `.trivyignore`; build-time / out-of-call-graph for chassis runtime | SI-2 | Platform Eng | 2026-Q3 | open — quarterly review next 2026-08 |
+| 5.4-C | Low | Switch to chainguard/python distroless base to eliminate the inherited CVE allow-list entirely | SC-13, SA-22 | Platform Eng | 2026-Q4 | open — depends on FIPS validation status of chainguard's Python build |
 | 0.5-A | Low | Replace deprecated FastAPI `@on_event("startup")` with lifespan handlers | SI-2 (technical debt) | Platform Eng | 2026-Q3 | open — warning, not failure |
 | 1.7-A | Low | Add DynamoDB GSI on `organization_guid` for `list_instances` (current code scans + filters) | CM-8 performance | Platform Eng | 2026-Q4 | open — fine while inventory < 10k |
 | 3.5-A | Medium | Cache JWKS responses with an explicit max-age + a soft-fail path | IA-2 availability | Platform Eng | 2026-Q3 | open |

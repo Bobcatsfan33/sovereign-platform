@@ -1,13 +1,18 @@
 # Sovereign Platform — metering-service image.
 # Phase 5.4 STIG hardening: pinned base, non-root sovereign:1000,
 # OCI labels, healthcheck.
-FROM python:3.11.10-slim-bookworm
+FROM python:3.11-slim-bookworm
 
 LABEL org.opencontainers.image.title="sovereign-platform-metering-service" \
       org.opencontainers.image.description="Tenant-scoped usage records (DynamoDB-backed) for chargeback / quota enforcement" \
       org.opencontainers.image.source="https://github.com/Bobcatsfan33/sovereign-platform" \
       org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.vendor="Sovereign Platform"
+
+RUN apt-get update \
+ && apt-get -y --no-install-recommends upgrade \
+ && apt-get clean \
+ && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd --system --gid 1000 sovereign \
  && useradd  --system --uid 1000 --gid sovereign --shell /usr/sbin/nologin --create-home sovereign
