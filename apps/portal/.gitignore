@@ -6,6 +6,9 @@ coverage/
 *.log
 .DS_Store
 
+# tsc -b incremental-build cache files
+*.tsbuildinfo
+
 # Local environment files (VITE_BROKER_URL etc. for non-dev hosts).
 .env
 .env.local
