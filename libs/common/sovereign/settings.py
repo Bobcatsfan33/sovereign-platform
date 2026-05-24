@@ -54,6 +54,12 @@ class Settings:
     # docker-compose + tests work out of the box.
     dev_jwt_secret: str = os.getenv("DEV_JWT_SECRET", "dev-jwt-secret-replace-me-with-a-real-one")
 
+    # Phase 3.5 OIDC: when issuer_url is set the broker switches from
+    # HS256 dev tokens to JWKS-verified RS256/ES256 tokens. Audience
+    # check is enabled when audience is non-empty.
+    oidc_issuer_url: str = os.getenv("OIDC_ISSUER_URL", "")
+    oidc_audience: str = os.getenv("OIDC_AUDIENCE", "")
+
     # Service identity — every service reports its own name to the audit
     # service so the trail says which component emitted the event.
     service_name: str = os.getenv("SERVICE_NAME", "unknown")
