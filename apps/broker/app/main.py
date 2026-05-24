@@ -1,26 +1,29 @@
 """Sovereign Platform — Open Service Broker (OSB v2 API).
 
-Phase 1 update: the catalog is now read from the DynamoDB-backed
-CatalogStore (task 1.7). On startup, the broker walks the renderer and
-connector registries and persists each component's `catalog_entry()`
-into the store. Packs added later via the pack registration system
-(task 1.9) appear in `/v2/catalog` automatically — the route reads
-from DynamoDB, no broker code change needed.
+Phase 3 update: every state-changing endpoint now goes through
 
-Phase 0 hardening is preserved: RFC 7807 problem detail on every
-endpoint, idempotent OSB semantics (410 on deprovision-missing,
-already_exists on reprovision), graceful 503 on downstream failure.
+    identity  → RBAC  → quota  → policy  → render  → state  → metering  → audit
+
+OSB-style HTTP Basic continues to work (Cloud Foundry compatibility);
+the chassis treats Basic-auth callers as `broker:<user>` and skips the
+RBAC check on the assumption that the broker host is trusted in that
+deployment. JWT callers go through the full RBAC pipeline and have
+their tenant + groups threaded into the policy input.
+
+GET /v2/usage/{tenant_id} surfaces the QuotaEnforcer's usage_summary
+so tenant admins see headroom and budget systems see chargeback data.
 """
 
 from __future__ import annotations
 
 import logging
 import secrets
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
 from botocore.exceptions import ClientError
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from sovereign.audit import Audit
 from sovereign.catalog import CatalogStore
@@ -28,6 +31,7 @@ from sovereign.connectors import registry as connector_registry
 from sovereign.connectors.github import GitHubConnector  # noqa: F401
 from sovereign.connectors.s3 import S3Connector  # noqa: F401
 from sovereign.errors import install_problem_detail_handlers
+from sovereign.metering import Metering
 from sovereign.models import (
     Binding,
     BindRequest,
@@ -40,26 +44,32 @@ from sovereign.models import (
 )
 from sovereign.packs import discover_packs, registered_packs
 from sovereign.policy import PolicyClient, build_policy_input
+from sovereign.quotas import QuotaEnforcer, QuotaStore
 from sovereign.renderers import register_renderer
 from sovereign.renderers import registry as renderer_registry
-
-# Importing these modules has the side effect of pre-registering the
-# chassis renderers + connectors into their registries. Pack discovery
-# (task 1.9) adds more entries via a discovery scan at startup.
 from sovereign.renderers.envoy import EnvoyRenderer  # noqa: F401  (side-effect import)
 from sovereign.settings import get_settings
 from sovereign.store import Store
+from sovereign.tenancy import (
+    AuthzResolver,
+    RoleStore,
+    TenantStore,
+    TokenUser,
+    authorize,
+)
+from sovereign.tenancy.jwt_auth import _decode as decode_jwt  # type: ignore[attr-defined]
+from sovereign.tenancy.models import (
+    ACTION_PROVISION,
+    ACTION_READ,
+    ACTION_UPDATE,
+)
 
-# EnvoyRenderer is registered in the control-plane process. The broker
-# also needs it in its own registry for catalog seeding (the broker
-# never calls renderer.render itself — that happens in the control
-# plane — but it needs the catalog_entry() metadata).
 register_renderer(EnvoyRenderer())
 
 logger = logging.getLogger("broker")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
-app = FastAPI(title="Sovereign Platform — OSB Broker", version="0.2.0")
+app = FastAPI(title="Sovereign Platform — OSB Broker", version="0.3.0")
 install_problem_detail_handlers(app, service_name="broker")
 
 security = HTTPBasic(auto_error=False)
@@ -67,26 +77,185 @@ store = Store()
 catalog = CatalogStore()
 audit = Audit(service="broker")
 policy = PolicyClient()
+tenant_store = TenantStore()
+role_store = RoleStore()
+authz = AuthzResolver(tenants=tenant_store, roles=role_store)
+quota_store = QuotaStore()
+quotas = QuotaEnforcer(quotas=quota_store)
+metering = Metering(service="broker")
 
 
-def auth(creds: HTTPBasicCredentials | None = Depends(security)) -> str:
-    """OSB-style HTTP Basic auth. Returns the authenticated principal name
-    for policy + audit use. None creds are tolerated (anonymous probe);
-    invalid creds are rejected."""
+# ── Identity ───────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class Caller:
+    """Resolved caller identity. `is_basic` callers bypass RBAC for OSB
+    compatibility — see auth model doc in README."""
+
+    user: TokenUser
+    is_basic: bool
+
+
+def identify(
+    authorization: str | None = Header(default=None),
+    creds: HTTPBasicCredentials | None = Depends(security),
+) -> Caller:
+    """Resolve the caller from either a Bearer JWT or HTTP Basic creds.
+    Returns a Caller; raises 401 if neither auth method is presented or
+    if the presented one is invalid."""
     s = get_settings()
+
+    if authorization and authorization.lower().startswith("bearer "):
+        token = authorization.removeprefix("Bearer ").removeprefix("bearer ").strip()
+        claims = decode_jwt(token)
+        sub = claims.get("sub")
+        if not sub:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="token missing 'sub' claim"
+            )
+        return Caller(
+            user=TokenUser(
+                principal=str(sub),
+                tenant_id=claims.get("tid"),
+                groups=tuple(claims.get("groups", []) or []),
+                raw=claims,
+            ),
+            is_basic=False,
+        )
+
     if creds is None:
-        return "anonymous"
+        # No auth at all is tolerated only for the catalog/health probes.
+        # State-changing routes use `state_change_identify` which rejects.
+        return Caller(
+            user=TokenUser(principal="anonymous", tenant_id=None, groups=(), raw={}),
+            is_basic=True,
+        )
+
     if not (
         secrets.compare_digest(creds.username, s.broker_username)
         and secrets.compare_digest(creds.password, s.broker_password)
     ):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid credentials")
-    return creds.username
+    return Caller(
+        user=TokenUser(
+            principal=f"broker:{creds.username}",
+            tenant_id=None,
+            groups=(),
+            raw={"basic_auth": True},
+        ),
+        is_basic=True,
+    )
+
+
+def state_change_identify(caller: Caller = Depends(identify)) -> Caller:
+    """Same as `identify` but rejects anonymous requests outright.
+    Wraps every state-changing route so we never silently admit
+    un-authenticated mutations."""
+    if caller.user.principal == "anonymous":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="authentication required",
+            headers={"WWW-Authenticate": 'Bearer realm="sovereign-platform"'},
+        )
+    return caller
+
+
+# ── Pipeline helpers ───────────────────────────────────────────────────
+
+
+def _resolve_tenant_id(caller: Caller, req_tenant_id: str | None) -> str:
+    """Pick a tenant_id from (request, token claim, default)."""
+    return req_tenant_id or caller.user.tenant_id or "default"
+
+
+def _enforce_rbac(caller: Caller, *, tenant_id: str, action: str) -> None:
+    """Phase 3 RBAC. Basic-auth callers bypass — they are trusted system
+    callers from the OSB-spec era. JWT callers go through the resolver."""
+    if caller.is_basic:
+        return
+    try:
+        authorize(caller.user, tenant_id=tenant_id, action=action, resolver=authz)
+    except HTTPException:
+        audit.emit(
+            "rbac.denied",
+            f"{action}:{tenant_id}",
+            actor=caller.user.principal,
+            tenant_id=tenant_id,
+            decision="deny",
+            metadata={"action": action, "groups": list(caller.user.groups)},
+        )
+        raise
+
+
+def _resolve_pack(service_type: str) -> str | None:
+    """Look up the pack a service_type belongs to via the catalog. None
+    if the entry isn't registered — pack quotas then don't apply."""
+    try:
+        entry = catalog.get_service(service_type)
+    except RuntimeError:
+        return None
+    return entry.pack if entry else None
+
+
+def _check_quota(
+    caller: Caller, *, tenant_id: str, service_type: str
+) -> None:
+    """Run the quota check. On reject, emit a `quota.exceeded` audit
+    event and raise 403 with the breakdown surfaced in the detail."""
+    pack = _resolve_pack(service_type)
+    result = quotas.check_provision(
+        tenant_id=tenant_id, service_type=service_type, pack=pack
+    )
+    if not result.allow:
+        audit.emit(
+            "quota.exceeded",
+            f"provision:{service_type}",
+            actor=caller.user.principal,
+            tenant_id=tenant_id,
+            decision="deny",
+            metadata={
+                "service_type": service_type,
+                "pack": pack,
+                "reasons": result.reasons,
+                "breakdown": [e.model_dump() for e in result.breakdown],
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "message": "quota exceeded",
+                "reasons": result.reasons,
+                "breakdown": [e.model_dump() for e in result.breakdown],
+            },
+        )
+
+
+def _tenant_policy_context(tenant_id: str) -> dict[str, Any]:
+    """Lift policy-input context fields (approved_services /
+    approved_regions / approved_plans) from the tenant's metadata so
+    the OPA bundle's CM-7 and gov-region rules see per-tenant limits
+    when they're configured."""
+    try:
+        tenant = tenant_store.get(tenant_id)
+    except ClientError:
+        return {}
+    if tenant is None:
+        return {}
+    md = tenant.metadata or {}
+    out: dict[str, Any] = {}
+    if isinstance(md.get("approved_services"), list):
+        out["approved_services"] = list(md["approved_services"])
+    if isinstance(md.get("approved_regions"), list):
+        out["approved_regions"] = list(md["approved_regions"])
+    if isinstance(md.get("approved_plans"), dict):
+        out["approved_plans"] = dict(md["approved_plans"])
+    return out
 
 
 def _evaluate_policy(
     *,
-    actor: str,
+    caller: Caller,
     instance_id: str,
     service_type: str,
     plan_id: str,
@@ -94,25 +263,27 @@ def _evaluate_policy(
     tenant_id: str,
     action: str,
 ) -> PolicyDecision:
-    """Call OPA and emit a `policy.evaluated` audit event with the
-    decision (task 2.7). On deny, raises 403 with the denies surfaced
-    in the problem-detail body. On allow, returns the decision so the
-    caller can attach the matched_layers to its own audit emission."""
+    """Build the policy input (with per-tenant context lifted from
+    metadata), call OPA, ALWAYS emit a 'policy.evaluated' audit event,
+    raise 403 on deny."""
+    context_overrides = _tenant_policy_context(tenant_id)
     policy_input = build_policy_input(
-        actor=actor,
+        actor=caller.user.principal,
         tenant_id=tenant_id,
         service_type=service_type,
         plan_id=plan_id,
         parameters=parameters,
+        approved_services=context_overrides.get("approved_services"),
+        approved_plans=context_overrides.get("approved_plans"),
+        approved_regions=context_overrides.get("approved_regions"),
+        context={"caller_groups": list(caller.user.groups)} if caller.user.groups else None,
     )
     decision = policy.evaluate(policy_input)
 
-    # Every evaluation — allow or deny — lands in the audit trail.
-    # This IS the continuous compliance evidence the auditor reads.
     audit.emit(
         "policy.evaluated",
         f"{action}:{instance_id}",
-        actor=actor,
+        actor=caller.user.principal,
         tenant_id=tenant_id,
         decision="allow" if decision.allow else "deny",
         metadata={
@@ -136,11 +307,30 @@ def _evaluate_policy(
     return decision
 
 
+def _emit_usage(
+    *, tenant_id: str, instance_id: str, service_type: str, plan_id: str
+) -> None:
+    """Record this provision in the metering service so future quota
+    checks see it. Best-effort: metering outages don't block provision."""
+    pack = _resolve_pack(service_type)
+    metering.record(
+        tenant_id=tenant_id,
+        resource_id=instance_id,
+        resource_type="instance",
+        quantity=1.0,
+        unit="instance",
+        metadata={
+            "service_type": service_type,
+            "plan_id": plan_id,
+            "pack": pack,
+        },
+    )
+
+
+# ── Startup ───────────────────────────────────────────────────────────
+
+
 def _seed_catalog() -> None:
-    """Walk the renderer + connector registries and upsert each
-    component's catalog_entry() into the DynamoDB catalog. Idempotent —
-    calling repeatedly is safe and is how packs get re-discovered on
-    broker restart."""
     try:
         catalog.ensure_table()
     except Exception:  # noqa: BLE001
@@ -180,16 +370,38 @@ def _seed_catalog() -> None:
     )
 
 
+def _ensure_tenancy_tables() -> None:
+    # UsageStore is owned by the metering service for writes, but the
+    # broker reads from it during the quota check — ensure_table is
+    # idempotent and lets the broker come up before the metering service
+    # in compose dependency races.
+    from sovereign.usage_store import UsageStore
+
+    ensurers = (
+        tenant_store.ensure_table,
+        role_store.ensure_table,
+        quota_store.ensure_table,
+        UsageStore().ensure_table,
+    )
+    for ensurer in ensurers:
+        try:
+            ensurer()
+        except Exception:  # noqa: BLE001
+            logger.exception("tenancy/quota table ensure failed; will retry on next startup")
+
+
 @app.on_event("startup")
 def startup() -> None:
     try:
         store.ensure_tables()
     except Exception:  # noqa: BLE001
         logger.exception("ensure_tables failed at startup; will retry on first request")
-    # Discover and register every installed pack BEFORE seeding the
-    # catalog so the seed sees pack-supplied renderers/connectors.
     discover_packs()
+    _ensure_tenancy_tables()
     _seed_catalog()
+
+
+# ── Routes ────────────────────────────────────────────────────────────
 
 
 @app.get("/healthz")
@@ -203,21 +415,14 @@ def healthz() -> dict[str, Any]:
     }
 
 
-@app.get("/v2/catalog", dependencies=[Depends(auth)])
-def get_catalog() -> dict[str, Any]:
-    """Return the persisted service catalog in OSB v2 shape. Two
-    extensions over the OSB minimum:
-      - `connectors`: the parallel connector catalog so the UI can
-        list both in one round-trip.
-      - `parameter_schema` and `tags` on each service.
-    """
+@app.get("/v2/catalog")
+def get_catalog(_: Caller = Depends(identify)) -> dict[str, Any]:
+    """Persisted service catalog. Same shape as Phase 1; the chassis
+    treats /catalog as unauthenticated-tolerant for OSB clients."""
     try:
         services = catalog.list_services()
         connectors = catalog.list_connectors()
     except RuntimeError as exc:
-        # Catalog table missing or query failed — degrade to whatever
-        # the in-memory registries advertise so an empty DynamoDB
-        # doesn't break the OSB clients.
         logger.warning("catalog read failed (%s); falling back to live registries", exc)
         services = [
             e
@@ -265,7 +470,6 @@ def get_catalog() -> dict[str, Any]:
 
 
 async def render(instance: ServiceInstance) -> dict[str, Any]:
-    """Ask the control plane to render this instance's config artifact."""
     s = get_settings()
     try:
         async with httpx.AsyncClient(timeout=10) as client:
@@ -286,7 +490,9 @@ async def render(instance: ServiceInstance) -> dict[str, Any]:
 
 @app.put("/v2/service_instances/{instance_id}", status_code=201)
 async def provision(
-    instance_id: str, req: ProvisionRequest, principal: str = Depends(auth)
+    instance_id: str,
+    req: ProvisionRequest,
+    caller: Caller = Depends(state_change_identify),
 ) -> dict[str, Any]:
     try:
         existing = store.get_instance(instance_id)
@@ -298,11 +504,11 @@ async def provision(
     if existing:
         return {"dashboard_url": f"/dashboard/{instance_id}", "operation": "already_exists"}
 
-    # Tenant id comes from organization_guid (OSB v2); Phase 3 tenancy
-    # replaces this with the OIDC-derived org claim.
-    tenant_id = req.organization_guid or "default"
+    tenant_id = _resolve_tenant_id(caller, req.organization_guid)
+    _enforce_rbac(caller, tenant_id=tenant_id, action=ACTION_PROVISION)
+    _check_quota(caller, tenant_id=tenant_id, service_type=req.service_id)
     _evaluate_policy(
-        actor=principal,
+        caller=caller,
         instance_id=instance_id,
         service_type=req.service_id,
         plan_id=req.plan_id,
@@ -329,11 +535,14 @@ async def provision(
             detail=f"state store unavailable after render: {exc}",
         ) from exc
 
+    _emit_usage(
+        tenant_id=tenant_id, instance_id=instance_id, service_type=req.service_id, plan_id=req.plan_id
+    )
     audit.emit(
         "instance.provisioned",
         instance_id,
         details=str(artifact),
-        actor=principal,
+        actor=caller.user.principal,
         tenant_id=tenant_id,
         metadata={"service_id": inst.service_id, "plan_id": inst.plan_id},
     )
@@ -342,21 +551,22 @@ async def provision(
 
 @app.patch("/v2/service_instances/{instance_id}")
 async def update(
-    instance_id: str, req: UpdateRequest, principal: str = Depends(auth)
+    instance_id: str,
+    req: UpdateRequest,
+    caller: Caller = Depends(state_change_identify),
 ) -> dict[str, Any]:
     inst = store.get_instance(instance_id)
     if not inst:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
-    tenant_id = inst.organization_guid or "default"
+    tenant_id = _resolve_tenant_id(caller, inst.organization_guid)
+    _enforce_rbac(caller, tenant_id=tenant_id, action=ACTION_UPDATE)
 
-    # Build a tentative-next-state parameters dict so the policy sees
-    # what the instance WOULD be after the patch, not the prior state.
     next_params = inst.parameters.model_dump(mode="json")
     if req.parameters is not None:
         next_params = req.parameters.model_dump(mode="json")
     next_plan = req.plan_id or inst.plan_id
     _evaluate_policy(
-        actor=principal,
+        caller=caller,
         instance_id=instance_id,
         service_type=inst.service_id,
         plan_id=next_plan,
@@ -376,32 +586,47 @@ async def update(
         "instance.updated",
         instance_id,
         details=str(artifact),
-        actor=principal,
+        actor=caller.user.principal,
         tenant_id=tenant_id,
         metadata={"version": inst.version},
     )
     return {"operation": "updated", "config": artifact}
 
 
-@app.delete("/v2/service_instances/{instance_id}", dependencies=[Depends(auth)])
-def deprovision(instance_id: str) -> dict[str, Any]:
+@app.delete("/v2/service_instances/{instance_id}")
+def deprovision(
+    instance_id: str, caller: Caller = Depends(state_change_identify)
+) -> dict[str, Any]:
     inst = store.get_instance(instance_id)
     if not inst:
         raise HTTPException(status_code=status.HTTP_410_GONE, detail="instance already absent")
+    tenant_id = _resolve_tenant_id(caller, inst.organization_guid)
+    _enforce_rbac(caller, tenant_id=tenant_id, action="deprovision")
     store.delete_instance(instance_id)
-    audit.emit("instance.deprovisioned", instance_id)
+    audit.emit(
+        "instance.deprovisioned",
+        instance_id,
+        actor=caller.user.principal,
+        tenant_id=tenant_id,
+    )
     return {}
 
 
 @app.put(
     "/v2/service_instances/{instance_id}/service_bindings/{binding_id}",
     status_code=201,
-    dependencies=[Depends(auth)],
 )
-def bind(instance_id: str, binding_id: str, req: BindRequest) -> dict[str, Any]:
+def bind(
+    instance_id: str,
+    binding_id: str,
+    req: BindRequest,
+    caller: Caller = Depends(state_change_identify),
+) -> dict[str, Any]:
     inst = store.get_instance(instance_id)
     if not inst:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
+    tenant_id = _resolve_tenant_id(caller, inst.organization_guid)
+    _enforce_rbac(caller, tenant_id=tenant_id, action="bind")
     b = Binding(
         binding_id=binding_id,
         instance_id=instance_id,
@@ -413,21 +638,52 @@ def bind(instance_id: str, binding_id: str, req: BindRequest) -> dict[str, Any]:
         },
     )
     store.put_binding(b)
-    audit.emit("binding.created", binding_id, details=instance_id, metadata={"instance_id": instance_id})
+    audit.emit(
+        "binding.created",
+        binding_id,
+        details=instance_id,
+        actor=caller.user.principal,
+        tenant_id=tenant_id,
+        metadata={"instance_id": instance_id},
+    )
     return {"credentials": b.credentials}
 
 
 @app.delete(
     "/v2/service_instances/{instance_id}/service_bindings/{binding_id}",
-    dependencies=[Depends(auth)],
 )
-def unbind(instance_id: str, binding_id: str) -> dict[str, Any]:
+def unbind(
+    instance_id: str,
+    binding_id: str,
+    caller: Caller = Depends(state_change_identify),
+) -> dict[str, Any]:
     store.delete_binding(binding_id)
-    audit.emit("binding.deleted", binding_id, details=instance_id, metadata={"instance_id": instance_id})
+    audit.emit(
+        "binding.deleted",
+        binding_id,
+        details=instance_id,
+        actor=caller.user.principal,
+        metadata={"instance_id": instance_id},
+    )
     return {}
 
 
-@app.get("/v2/service_instances/{instance_id}/last_operation", dependencies=[Depends(auth)])
-def last_operation(instance_id: str) -> dict[str, str]:
+@app.get("/v2/service_instances/{instance_id}/last_operation")
+def last_operation(
+    instance_id: str, _: Caller = Depends(identify)
+) -> dict[str, str]:
     inst = store.get_instance(instance_id)
     return {"state": inst.status.value if inst else "gone"}
+
+
+@app.get("/v2/usage/{tenant_id}")
+def get_usage(tenant_id: str, caller: Caller = Depends(state_change_identify)) -> dict[str, Any]:
+    """Per-tenant usage + quota summary. Phase 3 task 3.4.
+    RBAC: caller needs `read` at `tenant_id` — auditors and tenant
+    admins both qualify. Basic-auth callers (system tooling) bypass."""
+    _enforce_rbac(caller, tenant_id=tenant_id, action=ACTION_READ)
+    summary = quotas.usage_summary(tenant_id)
+    return {
+        "tenant_id": tenant_id,
+        "entries": [e.model_dump() for e in summary],
+    }

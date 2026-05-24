@@ -48,6 +48,23 @@ def broker_app(broker_module: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
 
     monkeypatch.setattr(broker_module, "policy", FakePolicy())
 
+    # Quota + metering also stubbed for OSB-state-machine focus.
+    from sovereign.quotas.models import QuotaCheckResult
+
+    class FakeQuotas:
+        def check_provision(self, **_kw: Any) -> QuotaCheckResult:
+            return QuotaCheckResult(allow=True)
+
+        def usage_summary(self, _tid: str) -> list[Any]:
+            return []
+
+    class FakeMetering:
+        def record(self, **_kw: Any) -> None:
+            return None
+
+    monkeypatch.setattr(broker_module, "quotas", FakeQuotas())
+    monkeypatch.setattr(broker_module, "metering", FakeMetering())
+
     broker_module._test_rendered = rendered  # type: ignore[attr-defined]
     broker_module._test_emitted = emitted  # type: ignore[attr-defined]
     return broker_module
