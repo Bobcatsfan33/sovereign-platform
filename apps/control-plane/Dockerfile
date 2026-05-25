@@ -22,7 +22,7 @@ WORKDIR /app
 COPY libs/common /app/libs/common
 COPY apps/control-plane/app /app/app
 
-RUN pip install --no-cache-dir --upgrade pip \
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel \
  && pip install --no-cache-dir \
       "fastapi>=0.111" \
       "uvicorn[standard]>=0.30" \
