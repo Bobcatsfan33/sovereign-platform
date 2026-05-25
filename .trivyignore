@@ -1,0 +1,64 @@
+# Sovereign Platform — trivy CVE allow-list.
+#
+# Trivy reads this file at scan time and skips the listed CVEs when
+# computing exit status. Every entry MUST justify itself inline — an
+# assessor reading this file is the audit trail for why these CVEs
+# don't block a release.
+#
+# Lifecycle:
+#   - Entries listed here are tracked as POA&M items in
+#     docs/ssp/poam.md (cluster id 5.4-CVE-*).
+#   - Each entry is reviewed quarterly against the upstream Debian /
+#     Alpine security tracker; entries with an available fixed version
+#     in the chassis base image MUST be removed (and the base bumped).
+#   - Last review: 2026-05-24.
+
+# ── OpenSSL (Debian bookworm libssl3) ────────────────────────────────
+# All OpenSSL findings are in the system-shipped libssl3 / openssl
+# packages. The chassis services use Python's `ssl` module backed by
+# the OS OpenSSL, but every chassis-controlled TLS endpoint is
+# terminated upstream by the agency LB (per docs/ssp/controls/sc.md
+# SC-12); these CVEs are not directly reachable from the chassis HTTP
+# surface. Bumping is gated on Debian point-release availability.
+CVE-2025-15467   # openssl: oversized Initial packet (QUIC) — chassis does not speak QUIC
+CVE-2025-69421   # openssl: PKCS#12 malformed file DoS — chassis does not parse PKCS#12
+CVE-2026-28387   # openssl: DANE TLSA UAF — chassis does not use DANE/TLSA
+CVE-2026-28388   # openssl: delta CRL NULL deref — chassis does not parse CRLs
+CVE-2026-28389   # openssl: CMS processing DoS — chassis does not parse CMS
+CVE-2026-28390   # openssl: CMS Envelope NULL deref — same
+CVE-2026-31789   # openssl: X.509 heap overflow on 32-bit — chassis runs 64-bit
+
+# ── GnuTLS (Debian-shipped, not used by chassis) ─────────────────────
+# Pulled in transitively by ca-certificates, apt, gnupg — none of the
+# chassis Python services link gnutls or use it at runtime. Tracked
+# for OS-level updates; service surface unaffected.
+CVE-2025-32988   # gnutls: otherName SAN export double-free
+CVE-2025-32990   # gnutls: certtool template parsing heap overflow
+CVE-2026-33845   # gnutls: DTLS zero-length fragment DoS
+CVE-2026-33846   # gnutls: DTLS handshake fragment heap overflow
+CVE-2026-3833    # gnutls: nameConstraints case-sensitive policy bypass
+CVE-2026-42009   # gnutls: DTLS packet reordering DoS
+CVE-2026-42010   # gnutls: RSA-PSK auth bypass via NUL in username
+
+# ── GnuPG / libcap / sqlite / xz / pam (system, not reachable) ───────
+# Used by apt + pip during build only; not in the runtime call graph
+# of any chassis service.
+CVE-2025-68973   # GnuPG: armor_filter OOB write — build-time tool only
+CVE-2026-4878    # libcap: TOCTOU in cap_set_file — chassis does not call cap_set_file
+CVE-2025-6965    # sqlite: integer truncation — chassis does not use sqlite
+CVE-2025-31115   # xz: heap UAF in threaded decoder — chassis does not decompress xz at runtime
+CVE-2025-6020    # linux-pam: directory traversal — chassis does not authenticate via PAM
+
+# ── Perl (build/install tooling only) ────────────────────────────────
+# Perl is pulled in by debianutils + base-files but not invoked by any
+# chassis service runtime.
+CVE-2023-31484   # perl: CPAN.pm TLS verification — chassis does not run CPAN at runtime
+CVE-2024-56406   # perl: heap buffer overflow — chassis does not invoke perl at runtime
+
+# ── Python packaging metadata findings ───────────────────────────────
+# setuptools/wheel CVEs are about malicious package installation. The
+# chassis Dockerfile installs from pinned dependency declarations; no
+# untrusted wheels are downloaded at runtime.
+CVE-2024-6345    # pypa/setuptools: RCE via package_index download
+CVE-2025-47273   # setuptools: PackageIndex path traversal
+CVE-2026-24049   # wheel: privilege escalation via malicious wheel
