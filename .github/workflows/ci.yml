@@ -175,7 +175,12 @@ jobs:
           severity: CRITICAL,HIGH
           exit-code: "1"
           ignore-unfixed: true
-          trivyignores: .trivyignore
+          # Absolute path — the trivy-action entrypoint resolves
+          # 'trivyignores' relative to its own working dir, not the
+          # repo root. Bare '.trivyignore' errors with "cannot find
+          # ignorefile". Using ${{ github.workspace }} pins the lookup
+          # to the repo checkout.
+          trivyignores: ${{ github.workspace }}/.trivyignore
       - name: write scan timestamp (for continuous-monitor freshness check)
         if: always()
         run: |
