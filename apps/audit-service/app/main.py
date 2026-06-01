@@ -36,6 +36,7 @@ from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.responses import JSONResponse
+from sovereign.audit_spool import AuditSpool
 from sovereign.cors import install_cors
 from sovereign.models import AuditEvent
 from sovereign.ratelimit import install_rate_limit
@@ -57,6 +58,27 @@ _buffer_lock = threading.Lock()
 _client_lock = threading.Lock()
 _client: Any = None  # clickhouse_connect.driver.Client | None — typed loosely to avoid hard import at module load
 _table_ready = False
+
+_spool: AuditSpool | None = (
+    AuditSpool(get_settings().audit_spool_path) if get_settings().audit_spool_path else None
+)
+
+
+def _buffer_or_spool(event: AuditEvent) -> str:
+    """Append to the in-memory buffer; when it is full, spill to the
+    durable disk spool instead of letting the deque silently drop the
+    oldest event (S5). Last resort (no spool configured) preserves the
+    prior bounded-loss behaviour but logs an error."""
+    with _buffer_lock:
+        if len(_buffer) < _BUFFER_CAP:
+            _buffer.append(event)
+            return "buffer"
+    if _spool is not None and _spool.append(event):
+        return "spool"
+    with _buffer_lock:
+        _buffer.append(event)
+    logger.error("audit buffer full and no durable spool; oldest event dropped")
+    return "dropped"
 
 
 def _connect() -> Any:
@@ -161,6 +183,7 @@ def healthz() -> dict[str, Any]:
         "clickhouse_target": f"{s.clickhouse_host}:{s.clickhouse_port}",
         "clickhouse_connected": _client is not None,
         "buffered_events": len(_buffer),
+        "spooled_events": _spool.count() if _spool is not None else 0,
     }
 
 
@@ -175,8 +198,7 @@ def ingest_event(event: AuditEvent) -> dict[str, Any]:
     key = f"{event.ts.isoformat()}|{event.tenant_id}|{event.action}|{event.resource}"
 
     if client is None:
-        with _buffer_lock:
-            _buffer.append(event)
+        _buffer_or_spool(event)
         return {"accepted": True, "key": key, "persisted": False, "buffered": True}
 
     # Drain any buffered events alongside this one.
@@ -187,11 +209,15 @@ def ingest_event(event: AuditEvent) -> dict[str, Any]:
             [_row(event)],
             column_names=_COLUMN_NAMES,
         )
+        if _spool is not None:
+            for spooled in _spool.drain():
+                with _buffer_lock:
+                    _buffer.append(spooled)
+            _flush_buffer(client)
         return {"accepted": True, "key": key, "persisted": True, "buffered": False}
     except Exception as exc:  # noqa: BLE001
         logger.warning("insert failed, buffering: %s", exc)
-        with _buffer_lock:
-            _buffer.append(event)
+        _buffer_or_spool(event)
         return {"accepted": True, "key": key, "persisted": False, "buffered": True}
 
 
