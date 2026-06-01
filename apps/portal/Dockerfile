@@ -31,14 +31,15 @@ LABEL org.opencontainers.image.title="sovereign-platform-portal" \
       org.opencontainers.image.vendor="Sovereign Platform"
 
 # Refresh Alpine packages so the runtime layer picks up the latest
-# security patches available at build time. libxml2 is named explicitly
-# so this layer's cache key changes whenever we bump the floor — without
-# that, buildx's `cache-from: gha` could replay a stale apk layer and
-# miss a freshly-published fix (this is exactly how libxml2 2.13.9-r0
-# shipped with CVE-2026-6732 / SI-2 despite the blanket upgrade). The
-# pinned floor fails the build loudly if the fix ever regresses.
-RUN apk --no-cache upgrade \
- && apk --no-cache add "libxml2>=2.13.9-r1"
+# security patches available at build time. This pulls libxml2's
+# CVE-2026-6732 fix (2.13.9-r1) automatically on architectures where
+# Alpine 3.21 has already backported it (e.g. aarch64); on x86_64 the
+# backport is still propagating, and libxml2 cannot be force-upgraded
+# ahead of it because nginx-module-xslt/njs + libxslt hard-link the base
+# libxml2.so.2 (see .trivyignore CVE-2026-6732 + POA&M 5.4-CVE-libxml2).
+# `--update-cache` makes the cache key change per build so buildx's
+# gha cache cannot replay a stale apk layer past a published fix.
+RUN apk --no-cache --update-cache upgrade
 
 COPY apps/portal/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /portal/dist /usr/share/nginx/html
