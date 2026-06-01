@@ -82,6 +82,11 @@ class Settings:
     # events survive a ClickHouse outage that outlasts the buffer.
     audit_spool_path: str = os.getenv("AUDIT_SPOOL_PATH", "")
 
+    # Step 0.3: secret-material backend selector. Only "env" ships in
+    # the chassis (SOVEREIGN_SECRET_<NAME> vars); production registers a
+    # Vault/Secrets-Manager provider via set_secrets_provider().
+    secrets_provider: str = os.getenv("SECRETS_PROVIDER", "env")
+
     # CORS allow-list for browser-facing services (broker + audit). Comma-
     # separated origin URLs; empty allows the dev defaults below only.
     # Production sets this to the portal's deployed origin(s).
