@@ -48,6 +48,15 @@ class Settings:
     broker_password: str = os.getenv("BROKER_PASSWORD", "broker")
     dev_bearer_token: str = os.getenv("DEV_BEARER_TOKEN", "dev-token")
 
+    # S1 hardening: when False, HTTP Basic (OSB) callers go through the full
+    # RBAC pipeline like JWT callers instead of being trusted. Defaults True
+    # for OSB/Cloud-Foundry back-compat; lock down in gov deployments.
+    broker_trust_basic_auth: bool = os.getenv("BROKER_TRUST_BASIC_AUTH", "true").lower() in {"1", "true", "yes"}
+
+    # S3 hardening: when True AND ENV=production, get_settings() fails closed
+    # if any dev sentinel secret is still active (not just logs an error).
+    strict_secrets: bool = os.getenv("STRICT_SECRETS", "false").lower() in {"1", "true", "yes"}
+
     # HS256 JWT secret for tenant-aware Phase-3 authorization. Real
     # deployments swap in JWKS-based verification against the agency IdP
     # via the OIDC integration in task 3.5; this default exists only so
@@ -86,4 +95,9 @@ def get_settings() -> Settings:
                 s.env,
                 ", ".join(live),
             )
+            if s.strict_secrets:
+                raise RuntimeError(
+                    "refusing to start in production with dev sentinels active: "
+                    + ", ".join(live)
+                )
     return s
