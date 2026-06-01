@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sovereign-finops-pack"
+version = "0.1.0"
+description = "Sovereign Platform FinOps pack — cost models, budgets, and chargeback over the chassis metering layer."
+requires-python = ">=3.11"
+# The chassis (sovereign) is provided by the platform install; declared
+# here for standalone installs.
+dependencies = ["pydantic>=2.7"]
+
+# This is the entry point the chassis `discover_packs()` walks. Installing
+# this wheel into a chassis venv makes the pack live with no code changes.
+[project.entry-points."sovereign.packs"]
+finops = "sovereign_finops:Pack"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["sovereign_finops*"]
