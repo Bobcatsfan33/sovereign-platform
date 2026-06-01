@@ -46,6 +46,7 @@ from sovereign.models import (
     UpdateRequest,
 )
 from sovereign.packs import discover_packs, registered_packs
+from sovereign.packs.policy_bundles import collect_policy_bundle_dirs
 from sovereign.policy import PolicyClient, build_policy_input
 from sovereign.quotas import QuotaEnforcer, QuotaStore
 from sovereign.ratelimit import install_rate_limit
@@ -423,6 +424,7 @@ def healthz() -> dict[str, Any]:
         "renderers": renderer_registry.service_types(),
         "connectors": connector_registry.connector_types(),
         "packs": registered_packs(),
+        "policy_bundles": collect_policy_bundle_dirs(),
     }
 
 

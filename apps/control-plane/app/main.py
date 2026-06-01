@@ -24,6 +24,7 @@ from sovereign.audit import Audit
 from sovereign.errors import install_problem_detail_handlers
 from sovereign.models import RenderRequest
 from sovereign.packs import discover_packs, registered_packs
+from sovereign.packs.policy_bundles import collect_policy_bundle_dirs
 from sovereign.ratelimit import install_rate_limit
 from sovereign.render import RenderValidationError
 from sovereign.renderers import register_renderer, registry
@@ -84,6 +85,7 @@ def healthz() -> dict[str, Any]:
         "service": "control-plane",
         "renderers": registry.service_types(),
         "packs": registered_packs(),
+        "policy_bundles": collect_policy_bundle_dirs(),
     }
 
 
