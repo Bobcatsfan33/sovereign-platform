@@ -182,7 +182,7 @@ def _resolve_tenant_id(caller: Caller, req_tenant_id: str | None) -> str:
 def _enforce_rbac(caller: Caller, *, tenant_id: str, action: str) -> None:
     """Phase 3 RBAC. Basic-auth callers bypass — they are trusted system
     callers from the OSB-spec era. JWT callers go through the resolver."""
-    if caller.is_basic:
+    if caller.is_basic and get_settings().broker_trust_basic_auth:
         return
     try:
         authorize(caller.user, tenant_id=tenant_id, action=action, resolver=authz)
