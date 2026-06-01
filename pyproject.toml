@@ -55,7 +55,7 @@ ignore = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "packs/finops/tests"]
+testpaths = ["tests", "packs/finops/tests", "packs/ai/tests"]
 addopts = "-ra --strict-markers"
 asyncio_mode = "auto"
 markers = [

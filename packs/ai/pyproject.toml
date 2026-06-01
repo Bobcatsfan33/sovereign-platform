@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sovereign-ai-pack"
+version = "0.1.0"
+description = "Sovereign Platform AI pack — managed inference endpoints and RAG workspaces with model-governance policy."
+requires-python = ">=3.11"
+dependencies = ["pydantic>=2.7", "PyYAML>=6.0"]
+
+# Entry point walked by the chassis discover_packs(). Installing this
+# wheel into a chassis venv makes the pack live with no code changes.
+[project.entry-points."sovereign.packs"]
+ai = "sovereign_ai:Pack"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["sovereign_ai*"]
