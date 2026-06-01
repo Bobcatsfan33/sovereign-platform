@@ -99,8 +99,11 @@ def test_catalog_requires_auth(broker_app: Any) -> None:
     r2 = client.get("/v2/catalog", auth=_broker_creds())
     assert r2.status_code == 200
     services = r2.json()["services"]
-    assert services[0]["id"] == "sovereign-envoy-lb"
-    assert {p["id"] for p in services[0]["plans"]} == {"standard-regional", "multi-region", "sidecar"}
+    # Look the LB up by id rather than position — when service packs are
+    # installed (e.g. the AI pack) the catalog carries more entries and the
+    # ordering is not guaranteed to put the chassis LB first.
+    lb = next(s for s in services if s["id"] == "sovereign-envoy-lb")
+    assert {p["id"] for p in lb["plans"]} == {"standard-regional", "multi-region", "sidecar"}
 
 
 @mock_aws
