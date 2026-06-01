@@ -73,6 +73,15 @@ class Settings:
     # service so the trail says which component emitted the event.
     service_name: str = os.getenv("SERVICE_NAME", "unknown")
 
+    # S4: in-process token-bucket rate limit. RPS<=0 disables it.
+    rate_limit_rps: float = float(os.getenv("RATE_LIMIT_RPS", "50"))
+    rate_limit_burst: float = float(os.getenv("RATE_LIMIT_BURST", "100"))
+
+    # S5: durable audit disk spool. Empty path disables it (in-memory
+    # ring buffer only). Set to a writable path in production so audit
+    # events survive a ClickHouse outage that outlasts the buffer.
+    audit_spool_path: str = os.getenv("AUDIT_SPOOL_PATH", "")
+
     # CORS allow-list for browser-facing services (broker + audit). Comma-
     # separated origin URLs; empty allows the dev defaults below only.
     # Production sets this to the portal's deployed origin(s).
