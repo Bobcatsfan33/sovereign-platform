@@ -166,6 +166,16 @@ jobs:
       # report uploads as a CI artefact for the continuous monitor.
       - name: trivy scan (fail on critical/high)
         uses: aquasecurity/trivy-action@v0.36.0
+        # setup-trivy resolves the trivy binary version via the GitHub
+        # releases API. Anonymously that shares a 60 req/hr budget which
+        # 5 concurrent matrix jobs exhaust — one job (seen: portal) then
+        # dies with "Trivy version vX not found ... 403 Rate limit
+        # exceeded". GITHUB_TOKEN lifts the limit to 5000 req/hr so the
+        # security gate is deterministic. TRIVY_DB_REPOSITORY pins the
+        # vuln-DB to GHCR (no Docker Hub pull limits).
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TRIVY_DB_REPOSITORY: ghcr.io/aquasecurity/trivy-db:2
         with:
           image-ref: ${{ env.REGISTRY }}/${{ steps.img.outputs.prefix }}-${{ matrix.service }}:${{ github.sha }}
           format: sarif
