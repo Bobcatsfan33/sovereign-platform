@@ -9,6 +9,8 @@ production the token is provisioned by the secret manager, not hard-coded —
 this default exists only so local docker-compose works out of the box.
 """
 
+import secrets
+
 from fastapi import Header, HTTPException, status
 
 from .settings import get_settings
@@ -27,7 +29,7 @@ async def require_bearer(authorization: str | None = Header(default=None)) -> st
             headers={"WWW-Authenticate": 'Bearer realm="sovereign-platform"'},
         )
     presented = authorization.removeprefix("Bearer ").strip()
-    if presented != token:
+    if not secrets.compare_digest(presented, token):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="invalid token",
