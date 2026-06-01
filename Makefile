@@ -1,6 +1,7 @@
 .PHONY: help venv install up up-detached down clean logs status seed test test-cov lint typecheck check fmt smoke
 
-PYTHON ?= python3.11
+# Auto-detect a Python >=3.11 interpreter. Override with `make PYTHON=/path/to/pythonX`.
+PYTHON ?= $(shell command -v python3.13 2>/dev/null || command -v python3.12 2>/dev/null || command -v python3.11 2>/dev/null || command -v python3 2>/dev/null || echo python3)
 VENV   ?= .venv
 PIP    := $(VENV)/bin/pip
 PY     := $(VENV)/bin/python
@@ -11,6 +12,7 @@ help:  ## list available targets
 # ── dev environment ──────────────────────────────────────────────────
 
 venv:  ## create local Python venv (3.11+)
+	@$(PYTHON) -c 'import sys; v=sys.version_info; sys.exit(0) if v[:2]>=(3,11) else sys.exit("ERROR: Sovereign Platform requires Python >=3.11; found %d.%d (%s). Install Python 3.12 (e.g. brew install python@3.12) or run: make PYTHON=/path/to/python3.12 install" % (v[0], v[1], sys.executable))'
 	$(PYTHON) -m venv $(VENV)
 	$(PIP) install --upgrade pip
 
