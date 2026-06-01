@@ -48,6 +48,7 @@ from sovereign.models import (
 from sovereign.packs import discover_packs, registered_packs
 from sovereign.policy import PolicyClient, build_policy_input
 from sovereign.quotas import QuotaEnforcer, QuotaStore
+from sovereign.ratelimit import install_rate_limit
 from sovereign.renderers import register_renderer
 from sovereign.renderers import registry as renderer_registry
 from sovereign.renderers.envoy import EnvoyRenderer  # noqa: F401  (side-effect import)
@@ -81,6 +82,7 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title="Sovereign Platform — OSB Broker", version="0.4.0", lifespan=lifespan)
 install_problem_detail_handlers(app, service_name="broker")
 install_cors(app)
+install_rate_limit(app)
 
 security = HTTPBasic(auto_error=False)
 store = Store()

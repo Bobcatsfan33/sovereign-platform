@@ -24,6 +24,7 @@ from sovereign.audit import Audit
 from sovereign.errors import install_problem_detail_handlers
 from sovereign.models import RenderRequest
 from sovereign.packs import discover_packs, registered_packs
+from sovereign.ratelimit import install_rate_limit
 from sovereign.render import RenderValidationError
 from sovereign.renderers import register_renderer, registry
 from sovereign.renderers.envoy import EnvoyRenderer
@@ -40,6 +41,7 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="Sovereign Platform — Envoy Control Plane", version="0.2.0", lifespan=lifespan)
+install_rate_limit(app)
 install_problem_detail_handlers(app, service_name="control-plane")
 
 audit = Audit(service="control-plane")

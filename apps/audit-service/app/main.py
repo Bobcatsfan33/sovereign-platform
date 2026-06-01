@@ -38,6 +38,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.responses import JSONResponse
 from sovereign.cors import install_cors
 from sovereign.models import AuditEvent
+from sovereign.ratelimit import install_rate_limit
 from sovereign.security import require_bearer
 from sovereign.settings import get_settings
 
@@ -46,6 +47,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 
 app = FastAPI(title="Sovereign Platform — Audit Service", version="0.2.0")
 install_cors(app)
+install_rate_limit(app)
 
 # ── ClickHouse client (lazy, with graceful degradation) ───────────────
 
