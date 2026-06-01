@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sovereign-multicloud-pack"
+version = "0.1.0"
+description = "Sovereign Platform Multi-Cloud pack — governed cloud accounts and landing zones with residency policy."
+requires-python = ">=3.11"
+dependencies = ["pydantic>=2.7"]
+
+[project.entry-points."sovereign.packs"]
+multicloud = "sovereign_multicloud:Pack"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["sovereign_multicloud*"]
