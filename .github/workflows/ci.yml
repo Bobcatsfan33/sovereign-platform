@@ -34,7 +34,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
       - run: pip install -e ".[dev]"
-      - run: ruff check libs apps tests
+      - run: ruff check libs apps tests packs
 
   typecheck:
     name: typecheck (mypy)
@@ -58,7 +58,7 @@ jobs:
           curl -fsSL -o /usr/local/bin/opa https://openpolicyagent.org/downloads/latest/opa_linux_amd64_static
           chmod +x /usr/local/bin/opa
           opa version
-      - name: opa test (verify + 100% coverage on base bundle)
+      - name: opa test (verify + 100% coverage on base + pack bundles)
         run: |
           opa test policies/ packs/finops/sovereign_finops/policies/ -v
           coverage=$(opa test policies/ packs/finops/sovereign_finops/policies/ --coverage --format=json | python3 -c "import json,sys; d=json.load(sys.stdin); print(int(d['coverage']))")
@@ -165,12 +165,6 @@ jobs:
       # or high CVE so vulnerable images never reach :latest. A SARIF
       # report uploads as a CI artefact for the continuous monitor.
       - name: trivy scan (fail on critical/high)
-        # Upstream tags all have the 'v' prefix
-        # (git ls-remote --tags aquasecurity/trivy-action); a previous
-        # commit hit `unable to find version` because I dropped it.
-        # The .trivyignore file at the repo root is an audit-logged
-        # allow-list of CVEs that don't reach the chassis runtime —
-        # each entry carries justification + a POA&M cross-reference.
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ env.REGISTRY }}/${{ steps.img.outputs.prefix }}-${{ matrix.service }}:${{ github.sha }}
@@ -181,8 +175,7 @@ jobs:
           ignore-unfixed: true
           # Absolute path — the trivy-action entrypoint resolves
           # 'trivyignores' relative to its own working dir, not the
-          # repo root. Bare '.trivyignore' errors with "cannot find
-          # ignorefile". Using ${{ github.workspace }} pins the lookup
+          # repo root. Using ${{ github.workspace }} pins the lookup
           # to the repo checkout.
           trivyignores: ${{ github.workspace }}/.trivyignore
       - name: write scan timestamp (for continuous-monitor freshness check)
@@ -223,6 +216,4 @@ jobs:
           AUDIT_SERVICE_URL: ${{ secrets.AUDIT_SERVICE_URL }}
           SOVEREIGN_BEARER_TOKEN: ${{ secrets.SOVEREIGN_BEARER_TOKEN }}
           AWS_REGION: us-gov-west-1
-          # In a real deployment, the runner assumes an IAM role via
-          # actions/aws-actions-configure-credentials before this step.
         run: python scripts/continuous_monitor.py --format json
