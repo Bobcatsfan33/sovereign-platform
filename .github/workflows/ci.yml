@@ -60,8 +60,8 @@ jobs:
           opa version
       - name: opa test (verify + 100% coverage on base + pack bundles)
         run: |
-          opa test policies/ packs/finops/sovereign_finops/policies/ -v
-          coverage=$(opa test policies/ packs/finops/sovereign_finops/policies/ --coverage --format=json | python3 -c "import json,sys; d=json.load(sys.stdin); print(int(d['coverage']))")
+          opa test policies/ packs/finops/sovereign_finops/policies/ packs/ai/sovereign_ai/policies/ -v
+          coverage=$(opa test policies/ packs/finops/sovereign_finops/policies/ packs/ai/sovereign_ai/policies/ --coverage --format=json | python3 -c "import json,sys; d=json.load(sys.stdin); print(int(d['coverage']))")
           echo "Overall policy coverage: $coverage%"
           # Gate: fail if overall policy coverage drops below 100%.
           [ "$coverage" -ge 100 ] || { echo "::error::policy coverage $coverage% < 100%"; exit 1; }
