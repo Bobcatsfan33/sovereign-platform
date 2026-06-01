@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import secrets
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
 
@@ -71,7 +72,13 @@ register_renderer(EnvoyRenderer())
 logger = logging.getLogger("broker")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
-app = FastAPI(title="Sovereign Platform — OSB Broker", version="0.4.0")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    _startup()
+    yield
+
+
+app = FastAPI(title="Sovereign Platform — OSB Broker", version="0.4.0", lifespan=lifespan)
 install_problem_detail_handlers(app, service_name="broker")
 install_cors(app)
 
@@ -393,8 +400,7 @@ def _ensure_tenancy_tables() -> None:
             logger.exception("tenancy/quota table ensure failed; will retry on next startup")
 
 
-@app.on_event("startup")
-def startup() -> None:
+def _startup() -> None:
     try:
         store.ensure_tables()
     except Exception:  # noqa: BLE001
