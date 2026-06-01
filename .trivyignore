@@ -28,6 +28,20 @@ CVE-2026-28389   # openssl: CMS processing DoS — chassis does not parse CMS
 CVE-2026-28390   # openssl: CMS Envelope NULL deref — same
 CVE-2026-31789   # openssl: X.509 heap overflow on 32-bit — chassis runs 64-bit
 
+# ── libxml2 (portal nginx:alpine image) ──────────────────────────────
+# CVE-2026-6732 (HIGH, CVSS 7.5) — libxml2 XSD-validation type-confusion
+# DoS. Fixed in libxml2 2.13.9-r1. TIME-BOXED allow-list, NOT a
+# permanent waiver: the fix IS published on aarch64 and the Dockerfile's
+# `apk upgrade` already pulls it there, but the Alpine 3.21 x86_64
+# backport is still propagating and libxml2 cannot be force-upgraded
+# ahead of it (nginx-module-xslt/njs + libxslt hard-link libxml2.so.2).
+# Reachability: the portal is a static nginx file server for the
+# pre-built SPA — it does not parse XSD-validated XML, so the DoS path is
+# not in its runtime call graph. POA&M 5.4-CVE-libxml2 tracks removal;
+# this entry MUST be deleted the moment `apk add libxml2>=2.13.9-r1`
+# resolves on x86_64 (re-check at next quarterly review).
+CVE-2026-6732    # libxml2: XSD-validation DoS — fix pending x86_64 backport; portal serves static files only
+
 # ── GnuTLS (Debian-shipped, not used by chassis) ─────────────────────
 # Pulled in transitively by ca-certificates, apt, gnupg — none of the
 # chassis Python services link gnutls or use it at runtime. Tracked

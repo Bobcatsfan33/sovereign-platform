@@ -14,6 +14,7 @@ preserved.
 from __future__ import annotations
 
 import logging
+from contextlib import asynccontextmanager
 from typing import Any
 
 import boto3
@@ -23,6 +24,8 @@ from sovereign.audit import Audit
 from sovereign.errors import install_problem_detail_handlers
 from sovereign.models import RenderRequest
 from sovereign.packs import discover_packs, registered_packs
+from sovereign.packs.policy_bundles import collect_policy_bundle_dirs
+from sovereign.ratelimit import install_rate_limit
 from sovereign.render import RenderValidationError
 from sovereign.renderers import register_renderer, registry
 from sovereign.renderers.envoy import EnvoyRenderer
@@ -32,7 +35,14 @@ from sovereign.settings import get_settings
 logger = logging.getLogger("control-plane")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
-app = FastAPI(title="Sovereign Platform — Envoy Control Plane", version="0.2.0")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    _startup()
+    yield
+
+
+app = FastAPI(title="Sovereign Platform — Envoy Control Plane", version="0.2.0", lifespan=lifespan)
+install_rate_limit(app)
 install_problem_detail_handlers(app, service_name="control-plane")
 
 audit = Audit(service="control-plane")
@@ -53,8 +63,7 @@ def _s3_client() -> Any:
     )
 
 
-@app.on_event("startup")
-def startup() -> None:
+def _startup() -> None:
     # Discover packs first so the control plane can dispatch to pack
     # renderers, not just the chassis Envoy renderer.
     discover_packs()
@@ -76,6 +85,7 @@ def healthz() -> dict[str, Any]:
         "service": "control-plane",
         "renderers": registry.service_types(),
         "packs": registered_packs(),
+        "policy_bundles": collect_policy_bundle_dirs(),
     }
 
 

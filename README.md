@@ -25,6 +25,8 @@ Each service exposes `/healthz` unauthenticated for compose / K8s probes.
 
 Requires Docker (with `compose`), Python 3.11+, and `make`.
 
+> **Interpreter:** the project requires **Python 3.11–3.13** (3.14 also works). `make` auto-detects `python3.13/3.12/3.11`; if only an older `python3` is on PATH the `venv` target fails fast with guidance. Override with `make PYTHON=/path/to/python3.12 install`. If you use [`uv`](https://docs.astral.sh/uv/): `uv venv --python 3.12 && uv pip install -e ".[dev]"`.
+
 ```bash
 cp .env.example .env
 

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import secrets
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
 
@@ -45,8 +46,10 @@ from sovereign.models import (
     UpdateRequest,
 )
 from sovereign.packs import discover_packs, registered_packs
+from sovereign.packs.policy_bundles import collect_policy_bundle_dirs
 from sovereign.policy import PolicyClient, build_policy_input
 from sovereign.quotas import QuotaEnforcer, QuotaStore
+from sovereign.ratelimit import install_rate_limit
 from sovereign.renderers import register_renderer
 from sovereign.renderers import registry as renderer_registry
 from sovereign.renderers.envoy import EnvoyRenderer  # noqa: F401  (side-effect import)
@@ -71,9 +74,16 @@ register_renderer(EnvoyRenderer())
 logger = logging.getLogger("broker")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
-app = FastAPI(title="Sovereign Platform — OSB Broker", version="0.4.0")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    _startup()
+    yield
+
+
+app = FastAPI(title="Sovereign Platform — OSB Broker", version="0.4.0", lifespan=lifespan)
 install_problem_detail_handlers(app, service_name="broker")
 install_cors(app)
+install_rate_limit(app)
 
 security = HTTPBasic(auto_error=False)
 store = Store()
@@ -175,7 +185,7 @@ def _resolve_tenant_id(caller: Caller, req_tenant_id: str | None) -> str:
 def _enforce_rbac(caller: Caller, *, tenant_id: str, action: str) -> None:
     """Phase 3 RBAC. Basic-auth callers bypass — they are trusted system
     callers from the OSB-spec era. JWT callers go through the resolver."""
-    if caller.is_basic:
+    if caller.is_basic and get_settings().broker_trust_basic_auth:
         return
     try:
         authorize(caller.user, tenant_id=tenant_id, action=action, resolver=authz)
@@ -393,8 +403,7 @@ def _ensure_tenancy_tables() -> None:
             logger.exception("tenancy/quota table ensure failed; will retry on next startup")
 
 
-@app.on_event("startup")
-def startup() -> None:
+def _startup() -> None:
     try:
         store.ensure_tables()
     except Exception:  # noqa: BLE001
@@ -415,6 +424,7 @@ def healthz() -> dict[str, Any]:
         "renderers": renderer_registry.service_types(),
         "connectors": connector_registry.connector_types(),
         "packs": registered_packs(),
+        "policy_bundles": collect_policy_bundle_dirs(),
     }
 
 

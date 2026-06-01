@@ -48,6 +48,15 @@ class Settings:
     broker_password: str = os.getenv("BROKER_PASSWORD", "broker")
     dev_bearer_token: str = os.getenv("DEV_BEARER_TOKEN", "dev-token")
 
+    # S1 hardening: when False, HTTP Basic (OSB) callers go through the full
+    # RBAC pipeline like JWT callers instead of being trusted. Defaults True
+    # for OSB/Cloud-Foundry back-compat; lock down in gov deployments.
+    broker_trust_basic_auth: bool = os.getenv("BROKER_TRUST_BASIC_AUTH", "true").lower() in {"1", "true", "yes"}
+
+    # S3 hardening: when True AND ENV=production, get_settings() fails closed
+    # if any dev sentinel secret is still active (not just logs an error).
+    strict_secrets: bool = os.getenv("STRICT_SECRETS", "false").lower() in {"1", "true", "yes"}
+
     # HS256 JWT secret for tenant-aware Phase-3 authorization. Real
     # deployments swap in JWKS-based verification against the agency IdP
     # via the OIDC integration in task 3.5; this default exists only so
@@ -63,6 +72,20 @@ class Settings:
     # Service identity — every service reports its own name to the audit
     # service so the trail says which component emitted the event.
     service_name: str = os.getenv("SERVICE_NAME", "unknown")
+
+    # S4: in-process token-bucket rate limit. RPS<=0 disables it.
+    rate_limit_rps: float = float(os.getenv("RATE_LIMIT_RPS", "50"))
+    rate_limit_burst: float = float(os.getenv("RATE_LIMIT_BURST", "100"))
+
+    # S5: durable audit disk spool. Empty path disables it (in-memory
+    # ring buffer only). Set to a writable path in production so audit
+    # events survive a ClickHouse outage that outlasts the buffer.
+    audit_spool_path: str = os.getenv("AUDIT_SPOOL_PATH", "")
+
+    # Step 0.3: secret-material backend selector. Only "env" ships in
+    # the chassis (SOVEREIGN_SECRET_<NAME> vars); production registers a
+    # Vault/Secrets-Manager provider via set_secrets_provider().
+    secrets_provider: str = os.getenv("SECRETS_PROVIDER", "env")
 
     # CORS allow-list for browser-facing services (broker + audit). Comma-
     # separated origin URLs; empty allows the dev defaults below only.
@@ -86,4 +109,9 @@ def get_settings() -> Settings:
                 s.env,
                 ", ".join(live),
             )
+            if s.strict_secrets:
+                raise RuntimeError(
+                    "refusing to start in production with dev sentinels active: "
+                    + ", ".join(live)
+                )
     return s
