@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sovereign-comms-pack"
+version = "0.1.0"
+description = "Sovereign Platform Comms pack — secure email and chat with transmission/retention policy."
+requires-python = ">=3.11"
+dependencies = ["pydantic>=2.7"]
+
+[project.entry-points."sovereign.packs"]
+comms = "sovereign_comms:Pack"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["sovereign_comms*"]
