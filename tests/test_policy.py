@@ -92,6 +92,37 @@ def test_evaluate_allow() -> None:
     assert decision.matched_layers == []
 
 
+def test_evaluate_parses_obligations() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "result": {
+                    "allow": True,
+                    "denies": [],
+                    "matched_layers": [],
+                    "obligations": ["pii-redaction", "audit-model-provenance"],
+                }
+            },
+        )
+
+    c = _client_with_mock(handler)
+    decision = c.evaluate({})
+    assert decision.allow is True
+    assert decision.obligations == ["pii-redaction", "audit-model-provenance"]
+
+
+def test_evaluate_obligations_default_empty() -> None:
+    # A decision without an obligations key parses to an empty list, not None.
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"result": {"allow": True, "denies": [], "matched_layers": []}}
+        )
+
+    c = _client_with_mock(handler)
+    assert c.evaluate({}).obligations == []
+
+
 def test_evaluate_deny_surfaces_denies() -> None:
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -244,6 +275,71 @@ def test_provision_allowed_emits_allow_audit(broker_with_policy: Any) -> None:
     assert policy_audits[0]["decision"] == "allow"
     assert policy_audits[0]["tenant_id"] == "agency-x"
     assert policy_audits[0]["metadata"]["action"] == "provision"
+
+
+@mock_aws
+def test_provision_enforces_known_obligations(broker_with_policy: Any) -> None:
+    """On allow, every obligation the policy attaches is enforced and emits
+    an `obligation.enforced` audit event; provision still succeeds."""
+    broker_with_policy._test_set_policy(
+        PolicyDecision(
+            allow=True,
+            denies=[],
+            matched_layers=["pack:ai"],
+            obligations=["pii-redaction", "audit-model-provenance"],
+        )
+    )
+    with TestClient(broker_with_policy.app) as client:
+        r = client.put(
+            "/v2/service_instances/i-obl",
+            json=_provision_body(),
+            auth=("broker", "broker"),
+        )
+        assert r.status_code == 201, r.text
+
+    enforced = [
+        e for e in broker_with_policy._test_emitted if e["action"] == "obligation.enforced"
+    ]
+    assert {e["metadata"]["obligation"] for e in enforced} == {
+        "pii-redaction",
+        "audit-model-provenance",
+    }
+    assert all(e["decision"] == "allow" for e in enforced)
+    # The policy.evaluated event carries the obligations too.
+    pol = next(e for e in broker_with_policy._test_emitted if e["action"] == "policy.evaluated")
+    assert pol["metadata"]["obligations"] == ["pii-redaction", "audit-model-provenance"]
+
+
+@mock_aws
+def test_provision_unknown_obligation_fails_closed(broker_with_policy: Any) -> None:
+    """An obligation with no registered handler must fail the request closed
+    (503) rather than silently provisioning a non-compliant resource."""
+    broker_with_policy._test_set_policy(
+        PolicyDecision(
+            allow=True,
+            denies=[],
+            matched_layers=["pack:rogue"],
+            obligations=["unsupported-obligation"],
+        )
+    )
+    with TestClient(broker_with_policy.app) as client:
+        r = client.put(
+            "/v2/service_instances/i-bad-obl",
+            json=_provision_body(),
+            auth=("broker", "broker"),
+        )
+        assert r.status_code == 503
+        assert r.json()["detail"]["obligation"] == "unsupported-obligation"
+        # The instance was not provisioned.
+        r2 = client.get(
+            "/v2/service_instances/i-bad-obl/last_operation",
+            auth=("broker", "broker"),
+        )
+        assert r2.json()["state"] == "gone"
+
+    actions = [e["action"] for e in broker_with_policy._test_emitted]
+    assert "obligation.failed" in actions
+    assert "instance.provisioned" not in actions
 
 
 @mock_aws
