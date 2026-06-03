@@ -25,7 +25,8 @@ from typing import Any
 
 import httpx
 from botocore.exceptions import ClientError
-from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, status
+from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel, Field
 from sovereign.audit import Audit
@@ -610,12 +611,88 @@ async def render(instance: ServiceInstance) -> dict[str, Any]:
         ) from exc
 
 
+async def _finalize_provision(
+    inst: ServiceInstance,
+    *,
+    caller: Caller,
+    tenant_id: str,
+) -> dict[str, Any]:
+    """Render the instance, mark it succeeded, meter + audit it. Returns
+    the rendered artifact. Shared by the synchronous and asynchronous
+    provision paths so both behave identically apart from when they run.
+
+    On failure the instance is flipped to `failed` (best-effort) so a
+    polling client sees a terminal failed state rather than a stuck
+    `provisioning`; the original error is re-raised for the sync caller."""
+    try:
+        artifact = await render(inst)
+    except Exception:
+        inst.status = InstanceStatus.failed
+        try:
+            store.put_instance(inst)
+        except ClientError:
+            logger.exception("failed to persist failed-state for %s", inst.instance_id)
+        raise
+
+    inst.status = InstanceStatus.succeeded
+    try:
+        store.put_instance(inst)
+    except ClientError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"state store unavailable after render: {exc}",
+        ) from exc
+
+    _emit_usage(
+        tenant_id=tenant_id,
+        instance_id=inst.instance_id,
+        service_type=inst.service_id,
+        plan_id=inst.plan_id,
+    )
+    audit.emit(
+        "instance.provisioned",
+        inst.instance_id,
+        details=str(artifact),
+        actor=caller.user.principal,
+        tenant_id=tenant_id,
+        metadata={"service_id": inst.service_id, "plan_id": inst.plan_id},
+    )
+    return artifact
+
+
+async def _finalize_provision_async(
+    inst: ServiceInstance, *, caller: Caller, tenant_id: str
+) -> None:
+    """Background-task wrapper around _finalize_provision. Swallows errors
+    (already reflected in instance.status=failed + an audit event) so the
+    background runner never crashes."""
+    try:
+        await _finalize_provision(inst, caller=caller, tenant_id=tenant_id)
+    except Exception:  # noqa: BLE001 — terminal state already recorded
+        logger.exception("async provision finalize failed for %s", inst.instance_id)
+        audit.emit(
+            "instance.provision_failed",
+            inst.instance_id,
+            actor=caller.user.principal,
+            tenant_id=tenant_id,
+            decision="deny",
+            metadata={"service_id": inst.service_id, "plan_id": inst.plan_id},
+        )
+
+
 @app.put("/v2/service_instances/{instance_id}", status_code=201)
 async def provision(
     instance_id: str,
     req: ProvisionRequest,
+    background: BackgroundTasks,
     caller: Caller = Depends(state_change_identify),
-) -> dict[str, Any]:
+    accepts_incomplete: bool = False,
+) -> Any:
+    """OSB provision. Synchronous by default; when `?accepts_incomplete=true`
+    the gates (RBAC/quota/policy/obligations) still run inline and the
+    instance is persisted as `provisioning`, but render/apply is deferred to
+    a background task and the broker returns 202 immediately. The client
+    polls /last_operation until the state is `succeeded` or `failed`."""
     try:
         existing = store.get_instance(instance_id)
     except ClientError as exc:
@@ -647,27 +724,21 @@ async def provision(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"state store unavailable: {exc}"
         ) from exc
 
-    artifact = await render(inst)
-    inst.status = InstanceStatus.succeeded
-    try:
-        store.put_instance(inst)
-    except ClientError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"state store unavailable after render: {exc}",
-        ) from exc
+    if accepts_incomplete:
+        # Defer render/apply; instance stays in 'provisioning' until the
+        # background task finalises it. OSB spec: respond 202 Accepted.
+        background.add_task(
+            _finalize_provision_async, inst, caller=caller, tenant_id=tenant_id
+        )
+        return JSONResponse(
+            status_code=status.HTTP_202_ACCEPTED,
+            content={
+                "dashboard_url": f"/dashboard/{instance_id}",
+                "operation": "provisioning",
+            },
+        )
 
-    _emit_usage(
-        tenant_id=tenant_id, instance_id=instance_id, service_type=req.service_id, plan_id=req.plan_id
-    )
-    audit.emit(
-        "instance.provisioned",
-        instance_id,
-        details=str(artifact),
-        actor=caller.user.principal,
-        tenant_id=tenant_id,
-        metadata={"service_id": inst.service_id, "plan_id": inst.plan_id},
-    )
+    artifact = await _finalize_provision(inst, caller=caller, tenant_id=tenant_id)
     return {"dashboard_url": f"/dashboard/{instance_id}", "operation": "provisioned", "config": artifact}
 
 
@@ -790,12 +861,32 @@ def unbind(
     return {}
 
 
+# Map chassis instance status -> OSB last_operation state vocabulary.
+# OSB clients understand "in progress" / "succeeded" / "failed"; the async
+# provision path leaves an instance in `provisioning` until its background
+# finalize completes, which a poller reads here as "in progress".
+_OSB_STATE = {
+    InstanceStatus.provisioning: "in progress",
+    InstanceStatus.succeeded: "succeeded",
+    InstanceStatus.failed: "failed",
+    InstanceStatus.deprovisioning: "in progress",
+}
+
+
 @app.get("/v2/service_instances/{instance_id}/last_operation")
 def last_operation(
     instance_id: str, _: Caller = Depends(identify)
 ) -> dict[str, str]:
     inst = store.get_instance(instance_id)
-    return {"state": inst.status.value if inst else "gone"}
+    if inst is None:
+        # Back-compat: existing clients/tests read `state == "gone"`.
+        return {"state": "gone", "operation": "gone"}
+    # `state` stays the raw chassis status (back-compat); `operation` is the
+    # OSB-spec last_operation state for spec-compliant pollers.
+    return {
+        "state": inst.status.value,
+        "operation": _OSB_STATE.get(inst.status, inst.status.value),
+    }
 
 
 @app.get("/v2/usage/{tenant_id}")
