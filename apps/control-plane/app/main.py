@@ -124,9 +124,14 @@ async def render(req: RenderRequest) -> dict[str, Any]:
 
     ar = await renderer.apply(artifact)
     if not ar.ok:
+        failed_step = ar.failed_step.kind if ar.failed_step else ""
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"apply failed at step {ar.failed_step.kind if ar.failed_step else '?'}: {ar.detail}",
+            detail={
+                "message": "apply failed",
+                "failed_step": failed_step,
+                "detail": ar.detail,
+            },
         )
 
     # Backward-compat response — broker has been asserting on this shape

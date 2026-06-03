@@ -45,16 +45,27 @@ Exit criteria:
 ### Sprint 1B: Reconciliation Controller
 
 Objective: move from one-shot lifecycle calls to convergent desired-state
-operations.
+operations inside the chassis.
 
 Exit criteria:
 
 - Apply failures set terminal failed OSB state with failed step detail.
+- Operation state includes retry-safe IDs, failure reason, and apply outputs.
+- Reconciliation retries converge drift or records a terminal failure.
+- OSB `last_operation` exposes desired version, applied version, drift status,
+  failed step, and retry count.
+
+### Sprint 1C: Pilot Pack Convergence
+
+Objective: prove one authorized-boundary pack in a real target environment.
+
+Exit criteria:
+
 - One pilot pack proves end-to-end create/update/delete in a non-emulator
   environment.
-- Operation state includes retry-safe IDs, failure reason, and apply outputs.
 - Drift detection identifies actual-state mismatch for the pilot pack.
-- Reconciliation retries converge drift or records a terminal failure.
+- Reconciliation corrects drift or records a terminal failure with operator
+  evidence.
 
 ### Sprint 2: Zero-Trust Service Security
 

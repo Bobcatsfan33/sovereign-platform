@@ -13,6 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 from moto import mock_aws
 from sovereign.renderers import TeardownResult
+from sovereign.tenancy import mint_dev_token
 
 from .conftest import BEARER
 
@@ -136,7 +137,13 @@ def test_full_lifecycle(broker_app: Any) -> None:
         # last_operation should report 'succeeded'
         r = client.get(f"/v2/service_instances/{instance_id}/last_operation", auth=_broker_creds())
         assert r.status_code == 200
-        assert r.json()["state"] == "succeeded"
+        last = r.json()
+        assert last["state"] == "succeeded"
+        assert last["operation"] == "succeeded"
+        assert last["operation_id"] == f"{instance_id}:v1:provision"
+        assert last["desired_version"] == 1
+        assert last["applied_version"] == 1
+        assert last["drift_status"] == "in_sync"
 
         # Idempotent re-provision returns already_exists
         r = client.put(
@@ -314,6 +321,87 @@ def test_last_operation_gone_has_operation_field(broker_app: Any) -> None:
         r = client.get("/v2/service_instances/never/last_operation", auth=_broker_creds())
         assert r.json()["state"] == "gone"
         assert r.json()["operation"] == "gone"
+
+
+@mock_aws
+def test_reconcile_recovers_failed_instance(
+    broker_app: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = {"render": 0}
+
+    async def failing_render(instance: Any) -> dict[str, Any]:
+        calls["render"] += 1
+        raise broker_app.HTTPException(
+            status_code=503,
+            detail={
+                "message": "apply failed",
+                "failed_step": "k8s-apply",
+                "detail": "cluster unavailable",
+            },
+        )
+
+    monkeypatch.setattr(broker_app, "render", failing_render)
+
+    with TestClient(broker_app.app) as client:
+        r = client.put(
+            "/v2/service_instances/i-reconcile",
+            json=_provision_body(),
+            auth=_broker_creds(),
+        )
+        assert r.status_code == 503
+
+        r = client.get("/v2/service_instances/i-reconcile/last_operation", auth=_broker_creds())
+        failed = r.json()
+        assert failed["state"] == "failed"
+        assert failed["failed_step_kind"] == "k8s-apply"
+        assert failed["drift_status"] == "drifted"
+
+        async def fixed_render(instance: Any) -> dict[str, Any]:
+            calls["render"] += 1
+            return {
+                "bucket": "sovereign-configs",
+                "key": f"instances/{instance.instance_id}/v{instance.version}/envoy.yaml",
+                "version": instance.version,
+                "service_type": instance.service_id,
+                "manifest": [{"kind": "k8s-apply", "target": "default"}],
+            }
+
+        monkeypatch.setattr(broker_app, "render", fixed_render)
+
+        r = client.post(
+            "/v2/reconcile",
+            json={"instance_id": "i-reconcile"},
+            auth=_broker_creds(),
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["changed"] == 1
+        assert body["results"][0]["action"] == "reconciled"
+
+        r = client.get("/v2/service_instances/i-reconcile/last_operation", auth=_broker_creds())
+        last = r.json()
+        assert last["state"] == "succeeded"
+        assert last["operation"] == "succeeded"
+        assert last["operation_id"] == "i-reconcile:v1:reconcile"
+        assert last["failed_step_kind"] is None
+        assert last["drift_status"] == "in_sync"
+        assert last["reconcile_attempts"] == 1
+
+    assert calls["render"] == 2
+    actions = [a for a, _ in broker_app._test_emitted]
+    assert "instance.reconciled" in actions
+
+
+@mock_aws
+def test_reconcile_rejects_jwt_callers(broker_app: Any) -> None:
+    token = mint_dev_token(sub="alice@gov", tenant_id="demo-org")
+    with TestClient(broker_app.app) as client:
+        r = client.post(
+            "/v2/reconcile",
+            json={},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 403
 
 
 # Suppress unused-import warning since BEARER is imported for parity with
