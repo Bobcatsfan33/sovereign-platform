@@ -1,6 +1,6 @@
 # Sovereign Platform
 
-A compliance-native self-service infrastructure platform for regulated and government environments. Sovereign Platform ships as a **base chassis** plus modular **service packs** (AI, Developer Platform, Data, SecOps, Identity, Edge, Multi-Cloud, Comms, Blockchain, FinOps).
+A compliance-native self-service infrastructure platform for regulated and government environments. Sovereign Platform ships as a **base chassis** plus modular **service packs** — all of which now live in `packs/`: AI, Data, SecOps, Identity, Multi-Cloud, Edge, Comms, Blockchain, and FinOps (the roadmap's Developer Platform capability is delivered through the AI and Data packs). See [Service packs](#service-packs) for the full catalog.
 
 > **North star**: any team inside a government agency can provision compliant infrastructure in minutes, not weeks. Every resource is born hardened, auditable, and policy-checked. The platform is the single control plane for all infrastructure.
 
@@ -20,6 +20,49 @@ The base chassis grew out of a clean-room Open Service Broker implementation —
 | `portal` | 8088 | Sovereign Portal — static React/TS SPA: catalog browse, provisioning wizard with policy pre-check, instance dashboard, compliance dashboard. Talks to broker + audit-service from the browser via CORS. |
 
 Each service exposes `/healthz` unauthenticated for compose / K8s probes.
+
+## Service packs
+
+All ten roadmap packs ship in `packs/`. A pack is a pip-installable wheel
+discovered through the `sovereign.packs` entry point — installing it into a
+chassis venv registers its renderers, connectors, catalog entries, and OPA
+policy bundle with no chassis code changes (`discover_packs()` walks the
+entry-point group at startup). Each pack contributes one or more
+**service types** to `/v2/catalog` and a layered `sovereign.pack.<name>`
+Rego bundle (100% test coverage, gated in CI) mapped to NIST SP 800-53
+controls.
+
+Renderers are pure: they produce a `RenderedArtifact` whose
+`deployment_manifest` is applied by a chassis **deployment executor**
+(`k8s-apply` / `terraform-apply` / config-only) — packs ship no apply
+logic of their own. Packs that emit policy **obligations** (PII redaction,
+audit tagging, validator registration, …) have them enforced fail-closed
+by the broker at provision time.
+
+| Pack | Service types | Backend | Key NIST controls |
+| --- | --- | --- | --- |
+| **AI** (`packs/ai`) | `inference-endpoint`, `rag-workspace` | k8s-apply | AC-4, SC-8, SC-28, SI-12 |
+| **Data** (`packs/data`) | `managed-database`, `vector-db` | terraform-apply | SC-28, CP-9, SI-12 |
+| **SecOps** (`packs/secops`) | `siem-workspace`, `log-pipeline` | k8s-apply | AU-9, AU-10, AU-11, SI-4 |
+| **Identity** (`packs/identity`) | `idp-broker`, `scim-bridge` | config-only | IA-2, IA-2(1), IA-2(12), IA-4, IA-8 |
+| **Multi-Cloud** (`packs/multicloud`) | `cloud-account`, `landing-zone` | terraform-apply | AC-4, CM-2, SC-7, AU-2 |
+| **Edge** (`packs/edge`) | `edge-node`, `edge-cluster` | k8s-apply | SI-7, SI-7(9), SC-28, SR-11 |
+| **Comms** (`packs/comms`) | `secure-email`, `secure-chat` | config-only | SC-8, SC-13, AU-11, AC-4 |
+| **Blockchain** (`packs/blockchain`) | `permissioned-ledger` | k8s-apply | AC-3, IA-3, SC-12, SC-13 |
+| **FinOps** (`packs/finops`) | `budget`, `chargeback-report` | metering (no infra) | SA-2, PM-3, AU-6 |
+| **Developer Platform** | folded into AI/Data (container & data services) | — | — |
+
+> The Developer Platform capability from the roadmap is delivered through
+> the AI and Data packs' container/data service types rather than a
+> separate pack. The other nine packs are independent wheels under
+> `packs/`.
+
+Install a pack into a running chassis venv:
+
+```bash
+pip install -e packs/ai          # registers inference-endpoint + rag-workspace
+# the broker picks up the new service types + policy bundle on next start
+```
 
 ## Local quick start
 
@@ -94,7 +137,11 @@ apps/control-plane      Envoy v3 config renderer (Bearer)
 apps/audit-service      Dedicated audit ingestion (Bearer, ClickHouse)
 apps/metering-service   Dedicated metering store (Bearer, DynamoDB)
 libs/common/sovereign   Shared library — models, store, audit client,
-                        envoy_v3 validator, settings, security, errors
+                        envoy_v3 validator, renderers, executors, secrets,
+                        settings, security, errors
+packs                   The ten service packs (AI, Data, SecOps, Identity,
+                        Multi-Cloud, Edge, Comms, Blockchain, FinOps) — each
+                        a wheel with renderers + OPA bundle + tests
 infra/terraform         AWS modules
 infra/packer            Envoy AMI image definition
 infra/salt              Salt states for Envoy hosts
