@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import time
 from typing import Any
-from unittest.mock import patch
 
 import jwt
 import pytest
@@ -39,7 +38,11 @@ def _rsa_jwk(public_key: Any, kid: str = "test-key") -> dict[str, Any]:
 
 
 def _mock_oidc_responses(
-    discovery_url: str, jwks_uri: str, jwks: dict[str, Any]
+    discovery_url: str,
+    jwks_uri: str,
+    jwks: dict[str, Any],
+    *,
+    jwks_cache_control: str | None = None,
 ) -> object:
     """Return an httpx mock function that responds to discovery + JWKS."""
     import httpx
@@ -55,7 +58,8 @@ def _mock_oidc_responses(
                 },
             )
         if str(request.url).startswith(jwks_uri):
-            return httpx.Response(200, json=jwks)
+            headers = {"cache-control": jwks_cache_control} if jwks_cache_control else {}
+            return httpx.Response(200, json=jwks, headers=headers)
         return httpx.Response(404, text=str(request.url))
 
     return httpx.MockTransport(handler)
@@ -113,14 +117,12 @@ def test_oidc_verifier_round_trip_with_mocked_jwks() -> None:
     # Patch httpx.get (discovery) AND PyJWKClient's url-fetch path.
     orig_get = _install_mock_transport(transport)
     try:
-        with patch("jwt.PyJWKClient.fetch_data") as fetch:
-            fetch.return_value = jwks
-            verifier = OidcVerifier(
-                issuer_url="https://idp.test", audience="sovereign-broker"
-            )
-            claims = verifier.verify(token)
-            assert claims["sub"] == "alice@gov"
-            assert claims["groups"] == ["sovereign-program-teams"]
+        verifier = OidcVerifier(
+            issuer_url="https://idp.test", audience="sovereign-broker"
+        )
+        claims = verifier.verify(token)
+        assert claims["sub"] == "alice@gov"
+        assert claims["groups"] == ["sovereign-program-teams"]
     finally:
         import httpx
 
@@ -153,13 +155,11 @@ def test_oidc_verifier_rejects_wrong_audience() -> None:
     )
     orig_get = _install_mock_transport(transport)
     try:
-        with patch("jwt.PyJWKClient.fetch_data") as fetch:
-            fetch.return_value = jwks
-            verifier = OidcVerifier(
-                issuer_url="https://idp.test", audience="expected-audience"
-            )
-            with pytest.raises(jwt.InvalidAudienceError):
-                verifier.verify(token)
+        verifier = OidcVerifier(
+            issuer_url="https://idp.test", audience="expected-audience"
+        )
+        with pytest.raises(jwt.InvalidAudienceError):
+            verifier.verify(token)
     finally:
         import httpx
 
@@ -179,6 +179,76 @@ def test_oidc_verifier_discovery_no_jwks_uri_raises() -> None:
             verifier._get_jwks_client()
     finally:
         httpx.get = orig_get  # type: ignore[assignment]
+
+
+def test_oidc_verifier_honors_jwks_max_age() -> None:
+    private_key, public_key = _make_rsa_keypair()
+    jwks = {"keys": [_rsa_jwk(public_key, kid="k1")]}
+    transport = _mock_oidc_responses(
+        "https://idp.test/.well-known/openid-configuration",
+        "https://idp.test/oauth2/jwks",
+        jwks,
+        jwks_cache_control="public, max-age=42",
+    )
+    orig_get = _install_mock_transport(transport)
+    try:
+        verifier = OidcVerifier(issuer_url="https://idp.test", cache_ttl=3600)
+        assert verifier._fetch_jwks_data() == jwks
+        assert verifier._jwks_ttl == 42
+    finally:
+        import httpx
+
+        httpx.get = orig_get  # type: ignore[assignment]
+
+
+def test_oidc_verifier_uses_stale_jwks_within_grace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx
+
+    jwks = {"keys": [{"kid": "k1"}]}
+    verifier = OidcVerifier(
+        issuer_url="https://idp.test",
+        cache_ttl=10,
+        stale_grace=30,
+    )
+    verifier._discovery = {"jwks_uri": "https://idp.test/oauth2/jwks"}
+    verifier._discovery_loaded_at = time.time()
+    verifier._jwks_data = jwks
+    verifier._jwks_loaded_at = time.time() - 11
+    verifier._jwks_ttl = 10
+
+    def unavailable(*_args: Any, **_kwargs: Any) -> httpx.Response:
+        raise httpx.ConnectError("idp down")
+
+    monkeypatch.setattr(httpx, "get", unavailable)
+
+    assert verifier._fetch_jwks_data() == jwks
+
+
+def test_oidc_verifier_rejects_stale_jwks_after_grace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx
+
+    verifier = OidcVerifier(
+        issuer_url="https://idp.test",
+        cache_ttl=10,
+        stale_grace=30,
+    )
+    verifier._discovery = {"jwks_uri": "https://idp.test/oauth2/jwks"}
+    verifier._discovery_loaded_at = time.time()
+    verifier._jwks_data = {"keys": [{"kid": "k1"}]}
+    verifier._jwks_loaded_at = time.time() - 45
+    verifier._jwks_ttl = 10
+
+    def unavailable(*_args: Any, **_kwargs: Any) -> httpx.Response:
+        raise httpx.ConnectError("idp down")
+
+    monkeypatch.setattr(httpx, "get", unavailable)
+
+    with pytest.raises(httpx.ConnectError):
+        verifier._fetch_jwks_data()
 
 
 # ── Group sync ────────────────────────────────────────────────────────

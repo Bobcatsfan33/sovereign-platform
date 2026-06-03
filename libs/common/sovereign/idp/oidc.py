@@ -17,8 +17,10 @@ A successful verify returns the raw claims dict. The caller (broker's
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -26,6 +28,24 @@ import jwt
 from jwt import PyJWKClient
 
 logger = logging.getLogger("sovereign.idp.oidc")
+
+
+_MAX_AGE_RE = re.compile(r"(?:^|,\s*)max-age=(\d+)(?:\s*,|$)")
+
+
+class _CachedJwksClient(PyJWKClient):
+    def __init__(
+        self,
+        uri: str,
+        fetcher: Callable[[], dict[str, Any]],
+        *,
+        lifespan: int,
+    ) -> None:
+        super().__init__(uri, lifespan=lifespan)
+        self._fetcher = fetcher
+
+    def fetch_data(self) -> Any:
+        return self._fetcher()
 
 
 class OidcVerifier:
@@ -38,12 +58,14 @@ class OidcVerifier:
         *,
         audience: str | None = None,
         cache_ttl: float = 3600.0,
+        stale_grace: float = 900.0,
         http_timeout: float = 5.0,
         algorithms: tuple[str, ...] = ("RS256", "ES256"),
     ) -> None:
         self._issuer = issuer_url.rstrip("/")
         self._audience = audience
         self._cache_ttl = cache_ttl
+        self._stale_grace = stale_grace
         self._timeout = http_timeout
         self._algorithms = list(algorithms)
 
@@ -51,6 +73,9 @@ class OidcVerifier:
         self._discovery: dict[str, Any] | None = None
         self._discovery_loaded_at: float = 0.0
         self._jwks_client: PyJWKClient | None = None
+        self._jwks_data: dict[str, Any] | None = None
+        self._jwks_loaded_at: float = 0.0
+        self._jwks_ttl: float = cache_ttl
 
     # ── public ────────────────────────────────────────────────────
 
@@ -105,6 +130,57 @@ class OidcVerifier:
             self._jwks_client = None  # invalidate so we rebuild against new jwks_uri
         return doc
 
+    def _cache_fresh(self, loaded_at: float, ttl: float) -> bool:
+        return (time.time() - loaded_at) < ttl
+
+    def _cache_stale_but_usable(self, loaded_at: float, ttl: float) -> bool:
+        return (time.time() - loaded_at) < (ttl + self._stale_grace)
+
+    def _response_max_age(self, response: httpx.Response) -> float | None:
+        header = response.headers.get("cache-control", "")
+        match = _MAX_AGE_RE.search(header)
+        if not match:
+            return None
+        try:
+            return float(match.group(1))
+        except ValueError:
+            return None
+
+    def _fetch_jwks_data(self) -> dict[str, Any]:
+        discovery = self._get_discovery()
+        jwks_uri = discovery.get("jwks_uri")
+        if not jwks_uri:
+            raise RuntimeError(f"{self._issuer}/.well-known/openid-configuration has no jwks_uri")
+
+        with self._lock:
+            if self._jwks_data is not None and self._cache_fresh(
+                self._jwks_loaded_at, self._jwks_ttl
+            ):
+                return self._jwks_data
+
+        try:
+            response = httpx.get(jwks_uri, timeout=self._timeout)
+            response.raise_for_status()
+            jwks = response.json()
+            ttl = self._response_max_age(response) or self._cache_ttl
+        except (httpx.HTTPError, ValueError) as exc:
+            with self._lock:
+                if self._jwks_data is not None and self._cache_stale_but_usable(
+                    self._jwks_loaded_at, self._jwks_ttl
+                ):
+                    logger.warning(
+                        "JWKS refresh failed (%s); using stale keys within grace window",
+                        exc,
+                    )
+                    return self._jwks_data
+            raise
+
+        with self._lock:
+            self._jwks_data = jwks
+            self._jwks_loaded_at = time.time()
+            self._jwks_ttl = ttl
+        return jwks
+
     def _get_jwks_client(self) -> PyJWKClient:
         with self._lock:
             cached = self._jwks_client
@@ -114,7 +190,11 @@ class OidcVerifier:
         jwks_uri = discovery.get("jwks_uri")
         if not jwks_uri:
             raise RuntimeError(f"{self._issuer}/.well-known/openid-configuration has no jwks_uri")
-        client = PyJWKClient(jwks_uri, lifespan=int(self._cache_ttl))
+        client = _CachedJwksClient(
+            jwks_uri,
+            self._fetch_jwks_data,
+            lifespan=max(1, int(self._cache_ttl)),
+        )
         with self._lock:
             self._jwks_client = client
         return client

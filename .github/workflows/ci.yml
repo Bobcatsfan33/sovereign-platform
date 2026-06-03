@@ -48,6 +48,31 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: mypy libs/common/sovereign
 
+  supply-chain:
+    name: supply chain (python sca + sbom)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - name: pip-audit
+        run: pip-audit --skip-editable --progress-spinner off
+      - name: generate CycloneDX SBOM
+        run: |
+          mkdir -p build/security
+          cyclonedx-py environment "$(python -c 'import sys; print(sys.executable)')" \
+            --output-format JSON \
+            --output-file build/security/python-sbom.cdx.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: python-sbom
+          path: build/security/python-sbom.cdx.json
+          retention-days: 30
+
   policy-test:
     name: policy test (opa)
     runs-on: ubuntu-latest
@@ -121,11 +146,13 @@ jobs:
     # Build the chassis service images on every PR so a broken Dockerfile
     # never lands on main. Push to GHCR only on main.
     name: docker build (${{ matrix.service }})
-    needs: [lint, typecheck, test, policy-test, portal]
+    needs: [lint, typecheck, supply-chain, test, policy-test, portal]
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+      id-token: write
+      attestations: write
     strategy:
       fail-fast: false
       matrix:
@@ -154,15 +181,13 @@ jobs:
         with:
           context: .
           file: apps/${{ matrix.service }}/Dockerfile
-          load: true  # load into the local docker so trivy can scan it
-          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-          tags: |
-            ${{ env.REGISTRY }}/${{ steps.img.outputs.prefix }}-${{ matrix.service }}:${{ github.sha }}
-            ${{ env.REGISTRY }}/${{ steps.img.outputs.prefix }}-${{ matrix.service }}:latest
+          load: true  # load into local Docker so trivy gates before registry push
+          push: false
+          tags: ${{ env.REGISTRY }}/${{ steps.img.outputs.prefix }}-${{ matrix.service }}:${{ github.sha }}
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
       # Phase 5.2 / SI-2 — trivy gate. Fail the build on any critical
-      # or high CVE so vulnerable images never reach :latest. A SARIF
+      # or high CVE so vulnerable images never reach the registry. A SARIF
       # report uploads as a CI artefact for the continuous monitor.
       - name: trivy scan (fail on critical/high)
         uses: aquasecurity/trivy-action@v0.36.0
@@ -202,6 +227,34 @@ jobs:
             trivy-${{ matrix.service }}.sarif
             .trivy-reports/${{ matrix.service }}.timestamp
           retention-days: 14
+      - name: push scanned image
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          IMAGE_TAG: ${{ env.REGISTRY }}/${{ steps.img.outputs.prefix }}-${{ matrix.service }}:${{ github.sha }}
+        run: docker push "$IMAGE_TAG"
+      - name: resolve pushed image digest
+        id: pushed-image
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ steps.img.outputs.prefix }}-${{ matrix.service }}
+          IMAGE_TAG: ${{ env.REGISTRY }}/${{ steps.img.outputs.prefix }}-${{ matrix.service }}:${{ github.sha }}
+        run: |
+          digest="$(docker buildx imagetools inspect "$IMAGE_TAG" --format '{{.Manifest.Digest}}')"
+          echo "name=$IMAGE" >> "$GITHUB_OUTPUT"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+      - name: install cosign
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: sigstore/cosign-installer@v3
+      - name: sign image with keyless cosign
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: cosign sign --yes "${{ steps.pushed-image.outputs.name }}@${{ steps.pushed-image.outputs.digest }}"
+      - name: attest image provenance
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ steps.pushed-image.outputs.name }}
+          subject-digest: ${{ steps.pushed-image.outputs.digest }}
+          push-to-registry: true
 
   continuous-monitor:
     # Phase 5.2 — cron-driven continuous monitoring. Runs every hour on

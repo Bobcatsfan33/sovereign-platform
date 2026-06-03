@@ -9,6 +9,7 @@ from sovereign.executors import (
     KubernetesExecutor,
     NoopExecutor,
     apply_manifest,
+    register_default_executors,
     register_executor,
 )
 from sovereign.executors import registry as executor_registry
@@ -30,6 +31,18 @@ def test_register_and_get() -> None:
     register_executor(ex)
     assert "envoy-snapshot" in executor_registry.kinds()
     assert executor_registry.get("envoy-snapshot") is ex
+
+
+def test_register_default_executors() -> None:
+    executor_registry.clear()
+    register_default_executors()
+    assert set(executor_registry.kinds()) == {
+        "envoy-snapshot",
+        "helm-upgrade",
+        "k8s-apply",
+        "terraform-apply",
+        "webhook",
+    }
 
 
 async def test_noop_executor_acknowledges() -> None:

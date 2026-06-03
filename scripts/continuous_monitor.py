@@ -32,13 +32,12 @@ import os
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Callable
 from urllib import error as urlerror
 from urllib import parse, request
-
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -165,6 +164,64 @@ def check_audit_freshness(window_minutes: int = 60) -> CheckResult:
         "PASS",
         f"{count} event(s) inside last {window_minutes} min window",
         ("AU-2", "AU-4", "IR-5"),
+    )
+
+
+def check_policy_deny_spike() -> CheckResult:
+    """Detect a burst of policy/RBAC denies for the same principal."""
+    audit_url = _env("AUDIT_SERVICE_URL")
+    token = _env("SOVEREIGN_BEARER_TOKEN") or _env("DEV_BEARER_TOKEN", "dev-token")
+    if not audit_url:
+        return CheckResult(
+            "policy_deny_spike",
+            "SKIP",
+            "AUDIT_SERVICE_URL not configured",
+            ("AC-2(12)", "SI-4", "IR-5"),
+        )
+    window_minutes = int(_env("POLICY_DENY_SPIKE_WINDOW_MINUTES", "15") or "15")
+    threshold = int(_env("POLICY_DENY_SPIKE_THRESHOLD", "25") or "25")
+    since = (datetime.now(UTC) - timedelta(minutes=window_minutes)).isoformat()
+    qs = parse.urlencode({"since": since, "decision": "deny", "limit": 1000})
+    url = f"{audit_url.rstrip('/')}/events?{qs}"
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    code, body = _http_get(url, headers=headers, timeout=10)
+    if code != 200:
+        return CheckResult(
+            "policy_deny_spike",
+            "FAIL",
+            f"audit deny query returned {code}: {body.decode(errors='replace')[:200]}",
+            ("AC-2(12)", "SI-4", "IR-5"),
+        )
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return CheckResult(
+            "policy_deny_spike",
+            "FAIL",
+            "audit deny query returned non-JSON body",
+            ("AC-2(12)", "SI-4"),
+        )
+    counts: dict[str, int] = {}
+    for event in payload.get("events", []):
+        if not isinstance(event, dict):
+            continue
+        actor = str(event.get("actor") or "unknown")
+        counts[actor] = counts.get(actor, 0) + 1
+    offenders = {actor: count for actor, count in counts.items() if count >= threshold}
+    if offenders:
+        worst_actor, worst_count = max(offenders.items(), key=lambda item: item[1])
+        return CheckResult(
+            "policy_deny_spike",
+            "FAIL",
+            f"{worst_actor} has {worst_count} deny event(s) in {window_minutes} minutes "
+            f"(threshold {threshold})",
+            ("AC-2(12)", "SI-4", "IR-5"),
+        )
+    return CheckResult(
+        "policy_deny_spike",
+        "PASS",
+        f"{sum(counts.values())} deny event(s) across {len(counts)} actor(s); threshold {threshold}",
+        ("AC-2(12)", "SI-4", "IR-5"),
     )
 
 
@@ -335,6 +392,7 @@ def check_settings_sentinels() -> CheckResult:
 CHECKS: dict[str, Callable[[], CheckResult]] = {
     "opa_policy_tests": check_opa_policy_tests,
     "audit_freshness": check_audit_freshness,
+    "policy_deny_spike": check_policy_deny_spike,
     "state_drift": check_state_drift,
     "image_scan_freshness": check_image_scan_freshness,
     "settings_sentinels": check_settings_sentinels,

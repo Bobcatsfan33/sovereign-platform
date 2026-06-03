@@ -106,12 +106,60 @@ convention.
 
 The broker imports `OidcVerifier` from `sovereign.idp`. To swap from
 HS256 dev tokens to JWKS-based verification, set `OIDC_ISSUER_URL`
-and `OIDC_AUDIENCE` in the environment. Phase 3 ships the verifier;
-Phase 4 (UI) will add the OAuth2 authorisation-code-with-PKCE flow
-the chassis UI uses to obtain tokens. Backend services that call
-the chassis API are expected to use OIDC client-credentials grants
-(Service Principals in Azure AD, Login.gov has a similar JWT-bearer
-grant for trusted SPs).
+and `OIDC_AUDIENCE` in the environment. The portal uses the OAuth2
+authorization-code-with-PKCE flow to obtain an API bearer token without
+placing an `id_token` in the browser URL fragment. Backend services
+that call the chassis API are expected to use OIDC client-credentials
+grants (Service Principals in Azure AD, Login.gov has a similar
+JWT-bearer grant for trusted SPs).
+
+JWKS caching honors the IdP's `Cache-Control: max-age` response when
+present. The fallback defaults are:
+
+```bash
+OIDC_JWKS_CACHE_TTL_SECONDS=3600
+OIDC_JWKS_STALE_GRACE_SECONDS=900
+```
+
+During a short IdP or network outage, the broker continues to verify
+tokens against stale cached keys inside the stale-grace window. After
+that window, verification fails closed.
+
+For state-changing API calls made with JWT/OIDC auth, the broker passes
+the token's `amr` claim to OPA. The base policy requires `mfa` in `amr`;
+tokens without MFA evidence are denied before provisioning, update,
+bind, or deprovision proceeds.
+
+## Portal OIDC Callback
+
+The portal can initiate an OIDC authorization-code-with-PKCE sign-in when these build-time
+variables are present:
+
+```bash
+VITE_OIDC_ISSUER_URL=https://idp.example.gov
+VITE_OIDC_CLIENT_ID=sovereign-portal
+VITE_OIDC_AUDIENCE=sovereign-api
+VITE_OIDC_REDIRECT_URI=https://portal.example.gov/oidc/callback
+# Optional when the IdP does not expose discovery to browser clients:
+VITE_OIDC_AUTHORIZATION_URL=https://idp.example.gov/authorize
+VITE_OIDC_TOKEN_URL=https://idp.example.gov/oauth/token
+```
+
+Before redirecting, the portal stores a random `state`, `nonce`, and
+PKCE code verifier in `sessionStorage`. The `/oidc/callback` route accepts
+the returned authorization code only when:
+
+- `state` matches the stored login state,
+- the code exchanges successfully with the stored PKCE verifier,
+- the returned ID token `iss` and `aud` claims match the configured
+  issuer and portal client ID,
+- the returned ID token `nonce` matches the stored nonce,
+- the returned ID token `exp` claim is not expired.
+
+The portal stores the token endpoint's `access_token` for API calls, falling
+back to `id_token` only when the IdP does not return an access token. The
+broker still performs authoritative JWT signature, issuer, audience, and MFA
+checks before accepting API calls.
 
 ## Audit trail
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import sys
 from datetime import UTC, datetime, timedelta
@@ -87,6 +88,66 @@ def test_audit_freshness_fail_on_http_error(monkeypatch: pytest.MonkeyPatch) -> 
     monitor = load_monitor()
     monkeypatch.setattr(monitor, "_http_get", lambda *_a, **_kw: (503, b"down"))
     result = monitor.check_audit_freshness()
+    assert result.status == "FAIL"
+    assert "503" in result.detail
+
+
+# ── check_policy_deny_spike ──────────────────────────────────────────
+
+
+def test_policy_deny_spike_skips_without_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AUDIT_SERVICE_URL", raising=False)
+    monitor = load_monitor()
+    result = monitor.check_policy_deny_spike()
+    assert result.status == "SKIP"
+    assert "AUDIT_SERVICE_URL" in result.detail
+
+
+def test_policy_deny_spike_passes_below_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AUDIT_SERVICE_URL", "http://audit.test")
+    monkeypatch.setenv("POLICY_DENY_SPIKE_THRESHOLD", "3")
+    monitor = load_monitor()
+
+    body = {
+        "events": [
+            {"actor": "alice", "decision": "deny"},
+            {"actor": "alice", "decision": "deny"},
+            {"actor": "bob", "decision": "deny"},
+        ]
+    }
+    monkeypatch.setattr(monitor, "_http_get", lambda *_a, **_kw: (200, json.dumps(body).encode()))
+
+    result = monitor.check_policy_deny_spike()
+
+    assert result.status == "PASS"
+    assert "3 deny event" in result.detail
+
+
+def test_policy_deny_spike_fails_at_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AUDIT_SERVICE_URL", "http://audit.test")
+    monkeypatch.setenv("POLICY_DENY_SPIKE_THRESHOLD", "2")
+    monitor = load_monitor()
+
+    body = {
+        "events": [
+            {"actor": "alice", "decision": "deny"},
+            {"actor": "alice", "decision": "deny"},
+            {"actor": "bob", "decision": "deny"},
+        ]
+    }
+    monkeypatch.setattr(monitor, "_http_get", lambda *_a, **_kw: (200, json.dumps(body).encode()))
+
+    result = monitor.check_policy_deny_spike()
+
+    assert result.status == "FAIL"
+    assert "alice has 2 deny" in result.detail
+
+
+def test_policy_deny_spike_fails_on_http_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AUDIT_SERVICE_URL", "http://audit.test")
+    monitor = load_monitor()
+    monkeypatch.setattr(monitor, "_http_get", lambda *_a, **_kw: (503, b"down"))
+    result = monitor.check_policy_deny_spike()
     assert result.status == "FAIL"
     assert "503" in result.detail
 

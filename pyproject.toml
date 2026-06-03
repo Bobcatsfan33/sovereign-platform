@@ -30,6 +30,8 @@ dev = [
   "mypy>=1.10",
   "types-PyYAML",
   "boto3-stubs[dynamodb,s3]",
+  "cyclonedx-bom>=5.0",
+  "pip-audit>=2.7",
 ]
 
 [tool.setuptools.packages.find]

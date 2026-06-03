@@ -16,11 +16,13 @@ so tenant admins see headroom and budget systems see chargeback data.
 
 from __future__ import annotations
 
+import json
 import logging
 import secrets
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -36,17 +38,22 @@ from sovereign.connectors.github import GitHubConnector  # noqa: F401
 from sovereign.connectors.s3 import S3Connector  # noqa: F401
 from sovereign.cors import install_cors
 from sovereign.errors import install_problem_detail_handlers
+from sovereign.executors import register_default_executors
+from sovereign.executors import registry as executor_registry
 from sovereign.metering import Metering
 from sovereign.models import (
     Binding,
     BindRequest,
+    DriftStatus,
     InstanceStatus,
+    OperationState,
     PolicyDecision,
     ProvisionRequest,
     RenderRequest,
     ServiceInstance,
     UpdateRequest,
 )
+from sovereign.observability import install_metrics_endpoint
 from sovereign.packs import discover_packs, registered_packs
 from sovereign.packs.policy_bundles import collect_policy_bundle_dirs
 from sovereign.policy import PolicyClient, build_policy_input
@@ -86,6 +93,15 @@ app = FastAPI(title="Sovereign Platform — OSB Broker", version="0.4.0", lifesp
 install_problem_detail_handlers(app, service_name="broker")
 install_cors(app)
 install_rate_limit(app)
+install_metrics_endpoint(
+    app,
+    service="broker",
+    extra_gauges=lambda: {
+        "broker_renderers_registered": len(renderer_registry.service_types()),
+        "broker_connectors_registered": len(connector_registry.connector_types()),
+        "broker_packs_registered": len(registered_packs()),
+    },
+)
 
 security = HTTPBasic(auto_error=False)
 store = Store()
@@ -282,6 +298,19 @@ def _evaluate_policy(
     metadata), call OPA, ALWAYS emit a 'policy.evaluated' audit event,
     raise 403 on deny."""
     context_overrides = _tenant_policy_context(tenant_id)
+    amr = caller.user.raw.get("amr", [])
+    if isinstance(amr, str):
+        amr = [amr]
+    elif not isinstance(amr, list):
+        amr = []
+    context = {
+        "action": action,
+        "auth_scheme": "basic" if caller.is_basic else "oidc",
+        "caller_groups": list(caller.user.groups),
+        "amr": amr,
+        "acr": caller.user.raw.get("acr", ""),
+        "require_mfa": not caller.is_basic,
+    }
     policy_input = build_policy_input(
         actor=caller.user.principal,
         tenant_id=tenant_id,
@@ -291,7 +320,7 @@ def _evaluate_policy(
         approved_services=context_overrides.get("approved_services"),
         approved_plans=context_overrides.get("approved_plans"),
         approved_regions=context_overrides.get("approved_regions"),
-        context={"caller_groups": list(caller.user.groups)} if caller.user.groups else None,
+        context=context,
     )
     decision = policy.evaluate(policy_input)
 
@@ -514,6 +543,7 @@ def _ensure_tenancy_tables() -> None:
 
 
 def _startup() -> None:
+    register_default_executors()
     try:
         store.ensure_tables()
     except Exception:  # noqa: BLE001
@@ -532,6 +562,7 @@ def healthz() -> dict[str, Any]:
         "status": "ok",
         "service": "broker",
         "renderers": renderer_registry.service_types(),
+        "executors": executor_registry.kinds(),
         "connectors": connector_registry.connector_types(),
         "packs": registered_packs(),
         "policy_bundles": collect_policy_bundle_dirs(),
@@ -592,6 +623,74 @@ def get_catalog(_: Caller = Depends(identify)) -> dict[str, Any]:
     }
 
 
+def _operation_id(inst: ServiceInstance, operation_type: str) -> str:
+    return f"{inst.instance_id}:v{inst.version}:{operation_type}"
+
+
+def _begin_operation(inst: ServiceInstance, operation_type: str) -> None:
+    inst.operation_id = _operation_id(inst, operation_type)
+    inst.operation_type = operation_type
+    inst.operation_state = OperationState.in_progress
+    inst.operation_reason = ""
+    inst.failed_step_kind = None
+    inst.drift_status = DriftStatus.reconciling
+
+
+def _mark_operation_succeeded(
+    inst: ServiceInstance,
+    *,
+    artifact: dict[str, Any],
+) -> None:
+    version = artifact.get("version", inst.version)
+    inst.applied_version = int(version) if isinstance(version, int | str) else inst.version
+    inst.operation_state = OperationState.succeeded
+    inst.operation_reason = ""
+    inst.failed_step_kind = None
+    inst.drift_status = DriftStatus.in_sync
+    inst.last_reconciled_at = datetime.now(UTC).isoformat()
+    inst.apply_outputs = {
+        "bucket": artifact.get("bucket", ""),
+        "key": artifact.get("key", ""),
+        "service_type": artifact.get("service_type", inst.service_id),
+        "manifest": artifact.get("manifest", []),
+    }
+
+
+def _failure_detail(exc: Exception) -> tuple[str, str | None]:
+    """Extract a stable failure reason and failed step kind from an exception."""
+    failed_step: str | None = None
+    if isinstance(exc, HTTPException):
+        detail = exc.detail
+        if isinstance(detail, dict):
+            reason = json.dumps(detail, sort_keys=True)
+            failed_step = detail.get("failed_step") if isinstance(detail.get("failed_step"), str) else None
+            return reason, failed_step
+        return str(detail), None
+
+    if isinstance(exc, httpx.HTTPStatusError):
+        try:
+            detail = exc.response.json().get("detail")
+        except ValueError:
+            detail = exc.response.text
+        if isinstance(detail, dict):
+            failed_step = detail.get("failed_step") if isinstance(detail.get("failed_step"), str) else None
+            return json.dumps(detail, sort_keys=True), failed_step
+        if isinstance(detail, str):
+            if "apply failed at step " in detail:
+                failed_step = detail.split("apply failed at step ", 1)[1].split(":", 1)[0]
+            return detail, failed_step
+    return str(exc), None
+
+
+def _mark_operation_failed(inst: ServiceInstance, exc: Exception) -> None:
+    reason, failed_step = _failure_detail(exc)
+    inst.operation_state = OperationState.failed
+    inst.operation_reason = reason
+    inst.failed_step_kind = failed_step
+    inst.drift_status = DriftStatus.drifted
+    inst.last_reconciled_at = datetime.now(UTC).isoformat()
+
+
 async def render(instance: ServiceInstance) -> dict[str, Any]:
     s = get_settings()
     try:
@@ -616,6 +715,8 @@ async def _finalize_provision(
     *,
     caller: Caller,
     tenant_id: str,
+    record_usage: bool = True,
+    audit_action: str = "instance.provisioned",
 ) -> dict[str, Any]:
     """Render the instance, mark it succeeded, meter + audit it. Returns
     the rendered artifact. Shared by the synchronous and asynchronous
@@ -624,10 +725,13 @@ async def _finalize_provision(
     On failure the instance is flipped to `failed` (best-effort) so a
     polling client sees a terminal failed state rather than a stuck
     `provisioning`; the original error is re-raised for the sync caller."""
+    if inst.operation_state is None:
+        _begin_operation(inst, "provision")
     try:
         artifact = await render(inst)
-    except Exception:
+    except Exception as exc:
         inst.status = InstanceStatus.failed
+        _mark_operation_failed(inst, exc)
         try:
             store.put_instance(inst)
         except ClientError:
@@ -635,6 +739,7 @@ async def _finalize_provision(
         raise
 
     inst.status = InstanceStatus.succeeded
+    _mark_operation_succeeded(inst, artifact=artifact)
     try:
         store.put_instance(inst)
     except ClientError as exc:
@@ -643,19 +748,25 @@ async def _finalize_provision(
             detail=f"state store unavailable after render: {exc}",
         ) from exc
 
-    _emit_usage(
-        tenant_id=tenant_id,
-        instance_id=inst.instance_id,
-        service_type=inst.service_id,
-        plan_id=inst.plan_id,
-    )
+    if record_usage:
+        _emit_usage(
+            tenant_id=tenant_id,
+            instance_id=inst.instance_id,
+            service_type=inst.service_id,
+            plan_id=inst.plan_id,
+        )
     audit.emit(
-        "instance.provisioned",
+        audit_action,
         inst.instance_id,
         details=str(artifact),
         actor=caller.user.principal,
         tenant_id=tenant_id,
-        metadata={"service_id": inst.service_id, "plan_id": inst.plan_id},
+        metadata={
+            "service_id": inst.service_id,
+            "plan_id": inst.plan_id,
+            "operation_id": inst.operation_id,
+            "applied_version": inst.applied_version,
+        },
     )
     return artifact
 
@@ -676,8 +787,132 @@ async def _finalize_provision_async(
             actor=caller.user.principal,
             tenant_id=tenant_id,
             decision="deny",
-            metadata={"service_id": inst.service_id, "plan_id": inst.plan_id},
+            metadata={
+                "service_id": inst.service_id,
+                "plan_id": inst.plan_id,
+                "operation_id": inst.operation_id,
+                "reason": inst.operation_reason,
+                "failed_step_kind": inst.failed_step_kind,
+            },
         )
+
+
+async def _teardown_instance(
+    inst: ServiceInstance,
+    *,
+    caller: Caller,
+    tenant_id: str,
+) -> None:
+    """Best-effort teardown of live artifacts before desired state deletion."""
+    renderer = renderer_registry.get(inst.service_id)
+    if renderer is None:
+        logger.warning("deprovision skipped teardown for %s: no renderer", inst.instance_id)
+        audit.emit(
+            "instance.teardown_skipped",
+            inst.instance_id,
+            actor=caller.user.principal,
+            tenant_id=tenant_id,
+            decision="deny",
+            metadata={"service_id": inst.service_id, "reason": "no renderer"},
+        )
+        return
+
+    try:
+        result = await renderer.teardown(inst)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("teardown raised for %s", inst.instance_id)
+        audit.emit(
+            "instance.teardown_failed",
+            inst.instance_id,
+            actor=caller.user.principal,
+            tenant_id=tenant_id,
+            decision="deny",
+            metadata={"service_id": inst.service_id, "reason": str(exc)},
+        )
+        return
+
+    action = "instance.torn_down" if result.ok else "instance.teardown_failed"
+    audit.emit(
+        action,
+        inst.instance_id,
+        actor=caller.user.principal,
+        tenant_id=tenant_id,
+        decision="allow" if result.ok else "deny",
+        metadata={
+            "service_id": inst.service_id,
+            "removed": result.removed,
+            "failed": result.failed,
+            "detail": result.detail,
+        },
+    )
+
+
+def _needs_reconcile(inst: ServiceInstance) -> bool:
+    return (
+        inst.status in {InstanceStatus.provisioning, InstanceStatus.failed}
+        or inst.drift_status in {DriftStatus.drifted, DriftStatus.reconciling}
+        or inst.applied_version != inst.version
+    )
+
+
+def _system_reconciler() -> Caller:
+    return Caller(
+        user=TokenUser(
+            principal="system:reconciler",
+            tenant_id=None,
+            groups=(),
+            raw={"system": True},
+        ),
+        is_basic=True,
+    )
+
+
+async def _reconcile_instance(inst: ServiceInstance) -> dict[str, Any]:
+    if not _needs_reconcile(inst):
+        return {
+            "instance_id": inst.instance_id,
+            "action": "skipped",
+            "state": inst.status.value,
+            "drift_status": inst.drift_status.value,
+        }
+
+    tenant_id = inst.organization_guid or "default"
+    caller = _system_reconciler()
+    inst.reconcile_attempts += 1
+    _begin_operation(inst, "reconcile")
+    try:
+        store.put_instance(inst)
+    except ClientError:
+        logger.exception("failed to persist reconcile start for %s", inst.instance_id)
+
+    try:
+        artifact = await _finalize_provision(
+            inst,
+            caller=caller,
+            tenant_id=tenant_id,
+            record_usage=False,
+            audit_action="instance.reconciled",
+        )
+    except Exception:
+        # _finalize_provision already persisted failed operation metadata.
+        logger.exception("reconcile failed for %s", inst.instance_id)
+        return {
+            "instance_id": inst.instance_id,
+            "action": "failed",
+            "state": inst.status.value,
+            "operation_id": inst.operation_id,
+            "reason": inst.operation_reason,
+            "failed_step_kind": inst.failed_step_kind,
+        }
+
+    return {
+        "instance_id": inst.instance_id,
+        "action": "reconciled",
+        "state": inst.status.value,
+        "operation_id": inst.operation_id,
+        "applied_version": inst.applied_version,
+        "artifact": artifact,
+    }
 
 
 @app.put("/v2/service_instances/{instance_id}", status_code=201)
@@ -717,6 +952,7 @@ async def provision(
     )
 
     inst = ServiceInstance(instance_id=instance_id, **req.model_dump())
+    _begin_operation(inst, "provision")
     try:
         store.put_instance(inst)
     except ClientError as exc:
@@ -773,21 +1009,35 @@ async def update(
     if req.parameters:
         inst.parameters = req.parameters
     inst.version += 1
+    _begin_operation(inst, "update")
     store.put_instance(inst)
-    artifact = await render(inst)
+    try:
+        artifact = await render(inst)
+    except Exception as exc:
+        inst.status = InstanceStatus.failed
+        _mark_operation_failed(inst, exc)
+        store.put_instance(inst)
+        raise
+    inst.status = InstanceStatus.succeeded
+    _mark_operation_succeeded(inst, artifact=artifact)
+    store.put_instance(inst)
     audit.emit(
         "instance.updated",
         instance_id,
         details=str(artifact),
         actor=caller.user.principal,
         tenant_id=tenant_id,
-        metadata={"version": inst.version},
+        metadata={
+            "version": inst.version,
+            "operation_id": inst.operation_id,
+            "applied_version": inst.applied_version,
+        },
     )
     return {"operation": "updated", "config": artifact}
 
 
 @app.delete("/v2/service_instances/{instance_id}")
-def deprovision(
+async def deprovision(
     instance_id: str, caller: Caller = Depends(state_change_identify)
 ) -> dict[str, Any]:
     inst = store.get_instance(instance_id)
@@ -795,6 +1045,7 @@ def deprovision(
         raise HTTPException(status_code=status.HTTP_410_GONE, detail="instance already absent")
     tenant_id = _resolve_tenant_id(caller, inst.organization_guid)
     _enforce_rbac(caller, tenant_id=tenant_id, action="deprovision")
+    await _teardown_instance(inst, caller=caller, tenant_id=tenant_id)
     store.delete_instance(instance_id)
     audit.emit(
         "instance.deprovisioned",
@@ -876,16 +1127,28 @@ _OSB_STATE = {
 @app.get("/v2/service_instances/{instance_id}/last_operation")
 def last_operation(
     instance_id: str, _: Caller = Depends(identify)
-) -> dict[str, str]:
+) -> dict[str, Any]:
     inst = store.get_instance(instance_id)
     if inst is None:
         # Back-compat: existing clients/tests read `state == "gone"`.
         return {"state": "gone", "operation": "gone"}
     # `state` stays the raw chassis status (back-compat); `operation` is the
     # OSB-spec last_operation state for spec-compliant pollers.
+    operation = (
+        inst.operation_state.value
+        if inst.operation_state is not None
+        else _OSB_STATE.get(inst.status, inst.status.value)
+    )
     return {
         "state": inst.status.value,
-        "operation": _OSB_STATE.get(inst.status, inst.status.value),
+        "operation": operation,
+        "operation_id": inst.operation_id,
+        "description": inst.operation_reason,
+        "failed_step_kind": inst.failed_step_kind,
+        "desired_version": inst.version,
+        "applied_version": inst.applied_version,
+        "drift_status": inst.drift_status.value,
+        "reconcile_attempts": inst.reconcile_attempts,
     }
 
 
@@ -923,6 +1186,44 @@ def list_instances(
     return {
         "instances": [i.model_dump(mode="json") for i in instances],
         "count": len(instances),
+    }
+
+
+# ── Reconciliation (Sprint 1B) ───────────────────────────────────────
+
+
+class ReconcileRequest(BaseModel):
+    instance_id: str | None = None
+    limit: int = Field(default=50, ge=1, le=500)
+
+
+@app.post("/v2/reconcile")
+async def reconcile(
+    body: ReconcileRequest, caller: Caller = Depends(state_change_identify)
+) -> dict[str, Any]:
+    """Run one reconciliation pass.
+
+    This is intentionally an operational surface. In the current auth model
+    only trusted system callers can trigger cross-tenant reconciliation; the
+    zero-trust sprint will replace that with workload identity.
+    """
+    if not caller.is_basic:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="reconcile requires system credentials",
+        )
+
+    if body.instance_id:
+        inst = store.get_instance(body.instance_id)
+        instances = [inst] if inst is not None else []
+    else:
+        instances = store.list_instances(limit=body.limit)
+
+    results = [await _reconcile_instance(inst) for inst in instances if inst is not None]
+    return {
+        "checked": len(instances),
+        "changed": sum(1 for r in results if r["action"] in {"reconciled", "failed"}),
+        "results": results,
     }
 
 

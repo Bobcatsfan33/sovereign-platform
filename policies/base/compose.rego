@@ -7,6 +7,7 @@ package sovereign.base
 import rego.v1
 
 import data.sovereign.base.allowed_services
+import data.sovereign.base.authentication
 import data.sovereign.base.audit_logging
 import data.sovereign.base.crypto
 import data.sovereign.base.encryption_at_rest
@@ -15,6 +16,7 @@ import data.sovereign.base.tenancy
 import data.sovereign.base.transmission
 
 deny contains msg if { some msg in tenancy.deny }
+deny contains msg if { some msg in authentication.deny }
 deny contains msg if { some msg in audit_logging.deny }
 deny contains msg if { some msg in transmission.deny }
 deny contains msg if { some msg in crypto.deny }

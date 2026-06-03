@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -58,6 +59,7 @@ def audit_app(audit_service_module: Any) -> tuple[Any, FakeClickHouseClient]:
     audit_service_module._client = fake
     audit_service_module._table_ready = True
     audit_service_module._buffer.clear()
+    audit_service_module._last_event_hash = None
     return audit_service_module.app, fake
 
 
@@ -82,6 +84,14 @@ class TestHealthz:
         assert body["clickhouse_connected"] is True
 
 
+class TestRetention:
+    def test_ttl_clause_uses_days(self, audit_service_module: Any) -> None:
+        assert audit_service_module._ttl_clause(730) == "TTL ts + INTERVAL 730 DAY DELETE"
+
+    def test_ttl_clause_can_be_disabled(self, audit_service_module: Any) -> None:
+        assert audit_service_module._ttl_clause(0) == ""
+
+
 class TestPostEvents:
     def test_requires_bearer(self, audit_app: tuple[Any, FakeClickHouseClient]) -> None:
         client = TestClient(audit_app[0])
@@ -99,7 +109,78 @@ class TestPostEvents:
         assert body["buffered"] is False
         assert fake.inserts == 1
         # row shape matches the SUT's column order
-        assert len(fake.rows[0]) == 7
+        assert len(fake.rows[0]) == 11
+        assert fake.rows[0][7] is None
+        assert len(fake.rows[0][8]) == 64
+        assert fake.rows[0][9] is None
+        assert fake.rows[0][10] is None
+
+    def test_hash_chains_accepted_events(
+        self, audit_app: tuple[Any, FakeClickHouseClient]
+    ) -> None:
+        app, fake = audit_app
+        client = TestClient(app)
+        first = _event_body()
+        second = _event_body()
+        second["resource"] = "svc/second"
+
+        assert client.post("/events", json=first, headers=AUTH_HEADER).status_code == 202
+        assert client.post("/events", json=second, headers=AUTH_HEADER).status_code == 202
+
+        assert fake.rows[0][7] is None
+        assert fake.rows[1][7] == fake.rows[0][8]
+        assert fake.rows[0][8] != fake.rows[1][8]
+
+    def test_exports_chained_event_to_siem(
+        self,
+        audit_app: tuple[Any, FakeClickHouseClient],
+        audit_service_module: Any,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        app, _fake = audit_app
+        sent: list[tuple[dict[str, Any], dict[str, str]]] = []
+
+        class FakeResponse:
+            status_code = 202
+
+        class FakeHttpClient:
+            def __init__(self, *, timeout: float) -> None:
+                assert timeout == 1.0
+
+            def __enter__(self) -> FakeHttpClient:
+                return self
+
+            def __exit__(self, *_args: object) -> None:
+                return None
+
+            def post(
+                self,
+                url: str,
+                *,
+                json: dict[str, Any],
+                headers: dict[str, str],
+            ) -> FakeResponse:
+                assert url == "http://siem.test/events"
+                sent.append((json, headers))
+                return FakeResponse()
+
+        monkeypatch.setattr(
+            audit_service_module,
+            "get_settings",
+            lambda: SimpleNamespace(
+                clickhouse_database="sovereign_test",
+                siem_webhook_url="http://siem.test/events",
+                siem_webhook_token="secret",
+                siem_webhook_timeout_seconds=1.0,
+            ),
+        )
+        monkeypatch.setattr(audit_service_module.httpx, "Client", FakeHttpClient)
+
+        r = TestClient(app).post("/events", json=_event_body(), headers=AUTH_HEADER)
+
+        assert r.status_code == 202
+        assert sent[0][1] == {"Authorization": "Bearer secret"}
+        assert len(sent[0][0]["event_hash"]) == 64
 
     def test_buffers_when_clickhouse_unavailable(
         self, audit_service_module: Any, monkeypatch: pytest.MonkeyPatch
@@ -159,6 +240,7 @@ class TestGetEvents:
         assert r.status_code == 200
         body = r.json()
         assert body["count"] == 2
+        assert "event_hash" in body["events"][0]
         # Verify the SUT built a parameterised SQL query with our filters.
         sql, params = fake.queries[-1]
         assert "tenant_id = {tenant_id:String}" in sql

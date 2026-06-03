@@ -16,6 +16,11 @@ compliant_lb_input := {
         "logging_enabled": true,
         "cipher_suites": ["TLS_AES_256_GCM_SHA384"],
     },
+    "context": {
+        "action": "provision",
+        "require_mfa": true,
+        "amr": ["pwd", "mfa"],
+    },
 }
 
 test_compliant_request_allows if {
@@ -73,6 +78,11 @@ test_every_base_aggregator_fires if {
         "tenant_id": "bad id!",
         "service_type": "rag-workspace",
         "plan_id": "small",
+        "context": {
+            "action": "provision",
+            "require_mfa": true,
+            "amr": ["pwd"],
+        },
         "parameters": {
             # gov_region.deny + transmission.deny + audit_logging.deny +
             # crypto.deny + encryption_at_rest.deny via various missing /
@@ -88,8 +98,9 @@ test_every_base_aggregator_fires if {
     }
     decision := sovereign.decision with input as everything_wrong
     decision.allow == false
-    # All seven base sub-rules contributed.
+    # All eight base sub-rules contributed.
     some t in decision.denies; contains(t, "AC-6")
+    some i in decision.denies; contains(i, "IA-2(11)")
     some a in decision.denies; contains(a, "AU-2")
     some s in decision.denies; contains(s, "SC-8")
     some c in decision.denies; contains(c, "SC-13")

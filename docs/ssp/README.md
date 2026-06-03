@@ -10,6 +10,16 @@ Developer Platform, Data, etc.) extend the boundary; each pack ships
 its own addendum that merges into this SSP via the template in
 [`pack-addendum-template.md`](./pack-addendum-template.md).
 
+## Enterprise Readiness Inputs
+
+Before treating this SSP as an assessment package, read the current
+enterprise-readiness plan and Sprint 0 architecture decisions:
+
+- [`../enterprise-readiness-plan.md`](../enterprise-readiness-plan.md)
+- [`../adr/0001-initial-authorization-boundary.md`](../adr/0001-initial-authorization-boundary.md)
+- [`../adr/0002-service-identity-and-secrets.md`](../adr/0002-service-identity-and-secrets.md)
+- [`../adr/0003-execution-and-reconciliation.md`](../adr/0003-execution-and-reconciliation.md)
+
 ## Layout
 
 ```

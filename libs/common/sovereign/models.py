@@ -11,6 +11,20 @@ class InstanceStatus(StrEnum):
     failed = "failed"
     deprovisioning = "deprovisioning"
 
+
+class DriftStatus(StrEnum):
+    unknown = "unknown"
+    in_sync = "in_sync"
+    drifted = "drifted"
+    reconciling = "reconciling"
+
+
+class OperationState(StrEnum):
+    in_progress = "in progress"
+    succeeded = "succeeded"
+    failed = "failed"
+
+
 class Listener(BaseModel):
     name: str
     port: int = Field(ge=1, le=65535)
@@ -50,6 +64,16 @@ class ServiceInstance(BaseModel):
     parameters: LbParameters
     status: InstanceStatus = InstanceStatus.provisioning
     version: int = 1
+    applied_version: int | None = None
+    operation_id: str | None = None
+    operation_type: str | None = None
+    operation_state: OperationState | None = None
+    operation_reason: str = ""
+    failed_step_kind: str | None = None
+    apply_outputs: dict[str, Any] = Field(default_factory=dict)
+    drift_status: DriftStatus = DriftStatus.unknown
+    reconcile_attempts: int = 0
+    last_reconciled_at: str | None = None
     created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
@@ -100,6 +124,10 @@ class AuditEvent(BaseModel):
     resource: str
     decision: str = "allow"
     metadata: dict[str, Any] = Field(default_factory=dict)
+    previous_hash: str | None = None
+    event_hash: str | None = None
+    signature_key_id: str | None = None
+    signature: str | None = None
 
 
 class PolicyRequest(BaseModel):

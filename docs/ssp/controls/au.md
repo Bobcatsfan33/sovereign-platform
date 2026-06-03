@@ -11,6 +11,7 @@ Every event lands as a typed `AuditEvent` row:
 
 ```
 ts | tenant_id | actor | action | resource | decision | metadata(JSON)
+previous_hash | event_hash | signature_key_id | signature
 ```
 
 …ordered by `(ts, tenant_id, action)` in the ClickHouse `MergeTree`
@@ -31,13 +32,14 @@ parse a free-text description.
 | **AU-7** Audit Record Reduction and Report Generation | implemented | The audit-service GET /events endpoint supports parameterised filters that map directly to ClickHouse `WHERE` clauses; the portal aggregates client-side for the posture summary. | `apps/audit-service/app/main.py::query_events`; `apps/portal/src/pages/Compliance.tsx::summarise` |
 | **AU-8** Time Stamps | implemented | `AuditEvent.ts` is timezone-aware (`datetime.now(UTC)`) and stored at millisecond resolution. The audit service column is `DateTime64(3)` (UTC). | `libs/common/sovereign/models.py::AuditEvent`; the ClickHouse `CREATE TABLE` in `apps/audit-service/app/main.py::_connect` |
 | **AU-9** Protection of Audit Information | implemented (in part) | The audit service is the only component with ClickHouse write credentials. Bearer auth is enforced on POST /events. Audit row deletion is not permitted in the chassis schema (no DELETE issued). | `apps/audit-service/app/main.py`; `libs/common/sovereign/security.py::require_bearer`. The ClickHouse cluster itself enforces user-level access (organizational, agency IaC). |
+| **AU-10** Non-repudiation | implemented | The audit service can sign every accepted row with an Ed25519 service-account key. Production defaults fail closed when audit signing is required but `AUDIT_SIGNATURE_KEY_ID` or `AUDIT_SIGNING_PRIVATE_KEY_PEM` is missing. | `libs/common/sovereign/audit_signing.py`; `apps/audit-service/app/main.py::_prepare_event`; `tests/test_audit_signing.py` |
 | **AU-9(4)** Access by Subset of Privileged Users | implemented (RBAC) | Auditor read-access is gated by the `auditor:{scope}` group; the broker's `/v2/usage/{tenant_id}` enforces `ACTION_READ` and the portal Compliance page sends the JWT through to the audit service. | `apps/broker/app/main.py::get_usage`; `libs/common/sovereign/tenancy/authz.py` |
-| **AU-11** Audit Record Retention | implemented (configurable) | Default retention is 24 months. The agency configures it via the ClickHouse `TTL` clause (added per-deployment in IaC, not in this repo — documented in POA&M 5.2-C). |  |
+| **AU-11** Audit Record Retention | implemented (configurable) | Default retention is 24 months (`AUDIT_RETENTION_DAYS=730`). The audit service applies a ClickHouse `TTL` clause during table creation/migration; agencies can override the setting in deployment overlays. | `apps/audit-service/app/main.py::_ttl_clause`; `deploy/k8s/production.yaml` |
 | **AU-12** Audit Record Generation | implemented | All chassis services emit via the shared `Audit` HTTP client. `Audit.emit()` always succeeds (best-effort) so a degraded audit service never blocks an OSB request — but the continuous monitor catches sustained failures within an hour. | `libs/common/sovereign/audit.py::Audit.emit`; `tests/test_audit_client.py` |
 
 ## High overlay
 
 | Additional | Note |
 | --- | --- |
-| AU-10 Non-repudiation | Sign audit rows with a service-account asymmetric key (POA&M 5.2-D). |
+| AU-10 Non-repudiation | Operational evidence must include key custody, rotation, and verifier procedures for the agency-managed signing key. |
 | AU-9(3) Cryptographic Protection | KMS-encrypted ClickHouse EBS at-rest plus TLS to the cluster (inherited from agency IaC). |

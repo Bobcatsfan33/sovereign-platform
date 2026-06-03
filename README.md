@@ -116,12 +116,26 @@ In production, Envoy hosts boot from Packer-built AMIs configured by SaltStack, 
 
 | Surface | Scheme | Why |
 | --- | --- | --- |
-| Broker `/v2/*` | HTTP Basic | OSB v2 spec compliance (Cloud Foundry style). |
-| Broker outbound to control-plane / audit | Bearer | Single shared token from `DEV_BEARER_TOKEN`. |
-| Control plane, audit, metering | Bearer | `sovereign.security.require_bearer` shared dependency. |
+| Broker `/v2/*` | HTTP Basic + Bearer JWT | OSB v2 compatibility plus tenant-aware authorization. |
+| Broker outbound to control-plane / audit | Bearer locally; workload identity target | `DEV_BEARER_TOKEN` is a development compatibility path. Production should disable shared bearer with `SHARED_BEARER_AUTH_ENABLED=false` and use the Sprint 2 workload-identity path. |
+| Control plane, audit, metering | Bearer locally; workload identity target | `sovereign.security.require_bearer` rejects traffic when shared bearer auth is disabled. |
 | `/healthz` on every service | none | Allow compose / K8s liveness probes. |
 
-In production, `DEV_BEARER_TOKEN`, `BROKER_PASSWORD`, and `S3_SECRET_KEY` are provisioned by the secret manager. Settings logs an ERROR at startup if `ENV=production` and any sentinel default is still in place.
+In production, `DEV_BEARER_TOKEN`, `BROKER_PASSWORD`, and `S3_SECRET_KEY` are provisioned by the secret manager. Settings fail closed at startup if `ENV=production` and any sentinel default is still in place, unless an operator explicitly sets `STRICT_SECRETS=false` for a temporary break-glass migration window. `BROKER_TRUST_BASIC_AUTH` also defaults to false in production so OSB Basic callers do not skip RBAC by accident.
+
+Production JWT auth requires `OIDC_ISSUER_URL` and `OIDC_AUDIENCE`; when configured, the broker verifies Bearer JWTs against the issuer JWKS instead of the local HS256 development secret.
+
+Production secret material must come from a managed backend. Set
+`SECRETS_PROVIDER=aws-secrets-manager` or `SECRETS_PROVIDER=aws-ssm`
+with `SECRETS_PREFIX` for environment scoping; `ENV=production` refuses
+to start with the env-only provider unless `REQUIRE_MANAGED_SECRETS=false`
+is explicitly set for a temporary migration window.
+
+For service-to-service auth, production deployments should terminate mTLS
+at a trusted mesh/front door and pass an allow-listed `X-SPIFFE-ID` or
+`X-Sovereign-Workload-Identity` header to protected services. Set
+`WORKLOAD_IDENTITY_ENABLED=true` and comma-separate allowed identities in
+`ALLOWED_WORKLOAD_IDENTITIES`.
 
 ## Errors
 

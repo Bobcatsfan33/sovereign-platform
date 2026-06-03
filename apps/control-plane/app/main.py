@@ -22,7 +22,10 @@ from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import Depends, FastAPI, HTTPException, Response, status
 from sovereign.audit import Audit
 from sovereign.errors import install_problem_detail_handlers
+from sovereign.executors import register_default_executors
+from sovereign.executors import registry as executor_registry
 from sovereign.models import RenderRequest
+from sovereign.observability import install_metrics_endpoint
 from sovereign.packs import discover_packs, registered_packs
 from sovereign.packs.policy_bundles import collect_policy_bundle_dirs
 from sovereign.ratelimit import install_rate_limit
@@ -44,6 +47,15 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title="Sovereign Platform — Envoy Control Plane", version="0.2.0", lifespan=lifespan)
 install_rate_limit(app)
 install_problem_detail_handlers(app, service_name="control-plane")
+install_metrics_endpoint(
+    app,
+    service="control-plane",
+    extra_gauges=lambda: {
+        "control_plane_renderers_registered": len(registry.service_types()),
+        "control_plane_executors_registered": len(executor_registry.kinds()),
+        "control_plane_packs_registered": len(registered_packs()),
+    },
+)
 
 audit = Audit(service="control-plane")
 
@@ -64,6 +76,7 @@ def _s3_client() -> Any:
 
 
 def _startup() -> None:
+    register_default_executors()
     # Discover packs first so the control plane can dispatch to pack
     # renderers, not just the chassis Envoy renderer.
     discover_packs()
@@ -84,6 +97,7 @@ def healthz() -> dict[str, Any]:
         "status": "ok",
         "service": "control-plane",
         "renderers": registry.service_types(),
+        "executors": executor_registry.kinds(),
         "packs": registered_packs(),
         "policy_bundles": collect_policy_bundle_dirs(),
     }
@@ -120,9 +134,14 @@ async def render(req: RenderRequest) -> dict[str, Any]:
 
     ar = await renderer.apply(artifact)
     if not ar.ok:
+        failed_step = ar.failed_step.kind if ar.failed_step else ""
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"apply failed at step {ar.failed_step.kind if ar.failed_step else '?'}: {ar.detail}",
+            detail={
+                "message": "apply failed",
+                "failed_step": failed_step,
+                "detail": ar.detail,
+            },
         )
 
     # Backward-compat response — broker has been asserting on this shape

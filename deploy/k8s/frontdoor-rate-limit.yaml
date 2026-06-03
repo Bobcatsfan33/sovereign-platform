@@ -1,0 +1,35 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: sovereign-frontdoor
+  namespace: sovereign-platform
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/limit-rps: "10"
+    nginx.ingress.kubernetes.io/limit-burst-multiplier: "3"
+    nginx.ingress.kubernetes.io/limit-connections: "20"
+    nginx.ingress.kubernetes.io/proxy-body-size: "1m"
+spec:
+  tls:
+    - hosts:
+        - sovereign.example.gov
+      secretName: replace-with-agency-tls-secret
+  rules:
+    - host: sovereign.example.gov
+      http:
+        paths:
+          - path: /v2
+            pathType: Prefix
+            backend:
+              service:
+                name: broker
+                port:
+                  number: 8085
+          - path: /events
+            pathType: Prefix
+            backend:
+              service:
+                name: audit-service
+                port:
+                  number: 8086

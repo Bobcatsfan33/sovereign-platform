@@ -27,6 +27,7 @@ which is logged.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import threading
@@ -34,11 +35,14 @@ from collections import deque
 from datetime import datetime
 from typing import Any
 
+import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.responses import JSONResponse
+from sovereign.audit_signing import sign_audit_event
 from sovereign.audit_spool import AuditSpool
 from sovereign.cors import install_cors
 from sovereign.models import AuditEvent
+from sovereign.observability import install_metrics_endpoint
 from sovereign.ratelimit import install_rate_limit
 from sovereign.security import require_bearer
 from sovereign.settings import get_settings
@@ -56,12 +60,75 @@ _BUFFER_CAP = 1000
 _buffer: deque[AuditEvent] = deque(maxlen=_BUFFER_CAP)
 _buffer_lock = threading.Lock()
 _client_lock = threading.Lock()
+_chain_lock = threading.Lock()
 _client: Any = None  # clickhouse_connect.driver.Client | None — typed loosely to avoid hard import at module load
 _table_ready = False
+_last_event_hash: str | None = None
 
 _spool: AuditSpool | None = (
     AuditSpool(get_settings().audit_spool_path) if get_settings().audit_spool_path else None
 )
+
+
+def _metrics_gauges() -> dict[str, int]:
+    return {
+        "audit_buffered_events": len(_buffer),
+        "audit_spooled_events": _spool.count() if _spool is not None else 0,
+        "audit_clickhouse_connected": 1 if _client is not None else 0,
+    }
+
+
+install_metrics_endpoint(app, service="audit-service", extra_gauges=_metrics_gauges)
+
+
+def _canonical_event_payload(event: AuditEvent) -> str:
+    return json.dumps(
+        event.model_dump(mode="json", exclude={"event_hash", "signature_key_id", "signature"}),
+        default=str,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def _chain_event(event: AuditEvent) -> AuditEvent:
+    """Attach previous_hash/event_hash to an accepted audit event."""
+    global _last_event_hash
+    with _chain_lock:
+        chained = event.model_copy(update={"previous_hash": _last_event_hash, "event_hash": None})
+        event_hash = hashlib.sha256(_canonical_event_payload(chained).encode("utf-8")).hexdigest()
+        chained = chained.model_copy(update={"event_hash": event_hash})
+        _last_event_hash = event_hash
+        return chained
+
+
+def _ensure_chained(event: AuditEvent) -> AuditEvent:
+    if event.event_hash:
+        return event
+    return _chain_event(event)
+
+
+def _prepare_event(event: AuditEvent) -> AuditEvent:
+    return sign_audit_event(_ensure_chained(event))
+
+
+def _export_to_siem(event: AuditEvent) -> None:
+    s = get_settings()
+    if not s.siem_webhook_url:
+        return
+    headers: dict[str, str] = {}
+    if s.siem_webhook_token:
+        headers["Authorization"] = f"Bearer {s.siem_webhook_token}"
+    try:
+        with httpx.Client(timeout=s.siem_webhook_timeout_seconds) as client:
+            response = client.post(
+                s.siem_webhook_url,
+                json=event.model_dump(mode="json"),
+                headers=headers,
+            )
+            if response.status_code >= 400:
+                logger.warning("SIEM webhook returned %s", response.status_code)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("SIEM webhook export failed: %s", exc)
 
 
 def _buffer_or_spool(event: AuditEvent) -> str:
@@ -97,6 +164,7 @@ def _connect() -> Any:
             s = get_settings()
             client = clickhouse_connect.get_client(host=s.clickhouse_host, port=s.clickhouse_port)
             client.command(f"CREATE DATABASE IF NOT EXISTS {s.clickhouse_database}")
+            ttl_clause = _ttl_clause(s.audit_retention_days)
             client.command(
                 f"""
                 CREATE TABLE IF NOT EXISTS {s.clickhouse_database}.audit_events (
@@ -106,11 +174,36 @@ def _connect() -> Any:
                   action String,
                   resource String,
                   decision String,
-                  metadata String
+                  metadata String,
+                  previous_hash Nullable(String),
+                  event_hash String,
+                  signature_key_id Nullable(String),
+                  signature Nullable(String)
                 ) ENGINE = MergeTree
                 ORDER BY (ts, tenant_id, action)
+                {ttl_clause}
                 """
             )
+            client.command(
+                f"ALTER TABLE {s.clickhouse_database}.audit_events "
+                "ADD COLUMN IF NOT EXISTS previous_hash Nullable(String)"
+            )
+            client.command(
+                f"ALTER TABLE {s.clickhouse_database}.audit_events "
+                "ADD COLUMN IF NOT EXISTS event_hash String DEFAULT ''"
+            )
+            client.command(
+                f"ALTER TABLE {s.clickhouse_database}.audit_events "
+                "ADD COLUMN IF NOT EXISTS signature_key_id Nullable(String)"
+            )
+            client.command(
+                f"ALTER TABLE {s.clickhouse_database}.audit_events "
+                "ADD COLUMN IF NOT EXISTS signature Nullable(String)"
+            )
+            if ttl_clause:
+                client.command(
+                    f"ALTER TABLE {s.clickhouse_database}.audit_events MODIFY {ttl_clause}"
+                )
             _client = client
             _table_ready = True
             logger.info("connected to ClickHouse and ensured audit_events table")
@@ -118,6 +211,12 @@ def _connect() -> Any:
         except Exception as exc:  # noqa: BLE001 — broad on purpose, degrade gracefully
             logger.warning("ClickHouse unavailable, buffering events: %s", exc)
             return None
+
+
+def _ttl_clause(days: int) -> str:
+    if days <= 0:
+        return ""
+    return f"TTL ts + INTERVAL {days} DAY DELETE"
 
 
 def _row(event: AuditEvent) -> list[Any]:
@@ -129,10 +228,26 @@ def _row(event: AuditEvent) -> list[Any]:
         event.resource,
         event.decision,
         json.dumps(event.metadata, default=str, sort_keys=True),
+        event.previous_hash,
+        event.event_hash or "",
+        event.signature_key_id,
+        event.signature,
     ]
 
 
-_COLUMN_NAMES = ["ts", "tenant_id", "actor", "action", "resource", "decision", "metadata"]
+_COLUMN_NAMES = [
+    "ts",
+    "tenant_id",
+    "actor",
+    "action",
+    "resource",
+    "decision",
+    "metadata",
+    "previous_hash",
+    "event_hash",
+    "signature_key_id",
+    "signature",
+]
 
 
 def _flush_buffer(client: Any) -> int:
@@ -141,7 +256,7 @@ def _flush_buffer(client: Any) -> int:
     rows: list[list[Any]] = []
     with _buffer_lock:
         while _buffer:
-            rows.append(_row(_buffer.popleft()))
+            rows.append(_row(_prepare_event(_buffer.popleft())))
     if not rows:
         return 0
     try:
@@ -169,6 +284,10 @@ def _event_from_row(row: list[Any]) -> AuditEvent:
         resource=row[4],
         decision=row[5],
         metadata=json.loads(row[6]) if row[6] else {},
+        previous_hash=row[7] if len(row) > 7 else None,
+        event_hash=row[8] if len(row) > 8 else None,
+        signature_key_id=row[9] if len(row) > 9 else None,
+        signature=row[10] if len(row) > 10 else None,
     )
 
 
@@ -194,11 +313,13 @@ def ingest_event(event: AuditEvent) -> dict[str, Any]:
     non-blocking. Always returns 202 unless validation fails (Pydantic
     handles that automatically with 422)."""
     s = get_settings()
+    event = _prepare_event(event)
     client = _connect()
     key = f"{event.ts.isoformat()}|{event.tenant_id}|{event.action}|{event.resource}"
 
     if client is None:
         _buffer_or_spool(event)
+        _export_to_siem(event)
         return {"accepted": True, "key": key, "persisted": False, "buffered": True}
 
     # Drain any buffered events alongside this one.
@@ -214,10 +335,12 @@ def ingest_event(event: AuditEvent) -> dict[str, Any]:
                 with _buffer_lock:
                     _buffer.append(spooled)
             _flush_buffer(client)
+        _export_to_siem(event)
         return {"accepted": True, "key": key, "persisted": True, "buffered": False}
     except Exception as exc:  # noqa: BLE001
         logger.warning("insert failed, buffering: %s", exc)
         _buffer_or_spool(event)
+        _export_to_siem(event)
         return {"accepted": True, "key": key, "persisted": False, "buffered": True}
 
 
@@ -268,7 +391,8 @@ def query_events(
 
     where = f"WHERE {' AND '.join(filters)}" if filters else ""
     sql = (
-        f"SELECT ts, tenant_id, actor, action, resource, decision, metadata "
+        f"SELECT ts, tenant_id, actor, action, resource, decision, metadata, "
+        f"previous_hash, event_hash, signature_key_id, signature "
         f"FROM {s.clickhouse_database}.audit_events {where} "
         f"ORDER BY ts DESC LIMIT {limit}"
     )
@@ -290,6 +414,10 @@ def query_events(
             "resource": row[4],
             "decision": row[5],
             "metadata": json.loads(row[6]) if row[6] else {},
+            "previous_hash": row[7] if len(row) > 7 else None,
+            "event_hash": row[8] if len(row) > 8 else None,
+            "signature_key_id": row[9] if len(row) > 9 else None,
+            "signature": row[10] if len(row) > 10 else None,
         }
         for row in result.result_rows
     ]

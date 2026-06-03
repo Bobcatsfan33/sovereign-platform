@@ -107,7 +107,7 @@ but exchange traffic across it through the documented interfaces.
 | DynamoDB (`sovereign_*` tables) | Service instances, bindings, usage, roles, quotas | AWS KMS CMK (default for GovCloud accounts; agency-owned key in IaC). |
 | S3 (`sovereign-configs/`) | Rendered Envoy bootstrap configs | SSE-KMS with agency CMK; bucket policy enforces `s3:x-amz-server-side-encryption=aws:kms`. |
 | ClickHouse (`sovereign.audit_events`) | Audit trail | EBS gp3 volume encrypted with the agency KMS CMK. |
-| OPA bundle (`policies/`) | Rego sources | Container image layer, signed at build (cosign — POA&M 5.2-H). |
+| OPA bundle (`policies/`) | Rego sources | Container image layer, signed at build with keyless cosign and verified by admission policy. |
 
 ## 4 — Port allow-list (summary)
 
