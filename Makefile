@@ -1,7 +1,7 @@
-.PHONY: help venv install up up-detached down clean logs status seed test test-cov lint typecheck check fmt smoke
+.PHONY: help venv install up up-detached down clean logs status seed test test-cov lint typecheck security-scan check fmt smoke
 
 # Auto-detect a Python >=3.11 interpreter. Override with `make PYTHON=/path/to/pythonX`.
-PYTHON ?= $(shell command -v python3.13 2>/dev/null || command -v python3.12 2>/dev/null || command -v python3.11 2>/dev/null || command -v python3 2>/dev/null || echo python3)
+PYTHON ?= $(shell command -v python3.14 2>/dev/null || command -v python3.13 2>/dev/null || command -v python3.12 2>/dev/null || command -v python3.11 2>/dev/null || command -v python3 2>/dev/null || echo python3)
 VENV   ?= .venv
 PIP    := $(VENV)/bin/pip
 PY     := $(VENV)/bin/python
@@ -64,6 +64,11 @@ lint:  ## ruff lint
 
 typecheck:  ## mypy on the shared lib surface
 	$(VENV)/bin/mypy libs/common/sovereign
+
+security-scan:  ## dependency SCA + CycloneDX SBOM for the Python chassis
+	@mkdir -p build/security
+	$(VENV)/bin/pip-audit --skip-editable --progress-spinner off
+	$(VENV)/bin/cyclonedx-py environment $(VENV)/bin/python --output-format JSON --output-file build/security/python-sbom.cdx.json
 
 check: lint typecheck test  ## lint + typecheck + tests — the local equivalent of CI
 

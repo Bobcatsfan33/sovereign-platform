@@ -116,12 +116,12 @@ In production, Envoy hosts boot from Packer-built AMIs configured by SaltStack, 
 
 | Surface | Scheme | Why |
 | --- | --- | --- |
-| Broker `/v2/*` | HTTP Basic | OSB v2 spec compliance (Cloud Foundry style). |
+| Broker `/v2/*` | HTTP Basic + Bearer JWT | OSB v2 compatibility plus tenant-aware authorization. |
 | Broker outbound to control-plane / audit | Bearer | Single shared token from `DEV_BEARER_TOKEN`. |
 | Control plane, audit, metering | Bearer | `sovereign.security.require_bearer` shared dependency. |
 | `/healthz` on every service | none | Allow compose / K8s liveness probes. |
 
-In production, `DEV_BEARER_TOKEN`, `BROKER_PASSWORD`, and `S3_SECRET_KEY` are provisioned by the secret manager. Settings logs an ERROR at startup if `ENV=production` and any sentinel default is still in place.
+In production, `DEV_BEARER_TOKEN`, `BROKER_PASSWORD`, and `S3_SECRET_KEY` are provisioned by the secret manager. Settings fail closed at startup if `ENV=production` and any sentinel default is still in place, unless an operator explicitly sets `STRICT_SECRETS=false` for a temporary break-glass migration window. `BROKER_TRUST_BASIC_AUTH` also defaults to false in production so OSB Basic callers do not skip RBAC by accident.
 
 ## Errors
 

@@ -16,6 +16,25 @@ _DEV_SENTINELS: dict[str, str] = {
 }
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.lower() in {"1", "true", "yes"}
+
+
+def _is_production(env: str) -> bool:
+    return env.lower() in {"production", "prod"}
+
+
+def _default_broker_trust_basic_auth(env: str) -> bool:
+    return not _is_production(env)
+
+
+def _default_strict_secrets(env: str) -> bool:
+    return _is_production(env)
+
+
 class Settings:
     # Environment marker — "dev" locally, "production" in real deployments.
     env: str = os.getenv("ENV", "dev")
@@ -51,11 +70,18 @@ class Settings:
     # S1 hardening: when False, HTTP Basic (OSB) callers go through the full
     # RBAC pipeline like JWT callers instead of being trusted. Defaults True
     # for OSB/Cloud-Foundry back-compat; lock down in gov deployments.
-    broker_trust_basic_auth: bool = os.getenv("BROKER_TRUST_BASIC_AUTH", "true").lower() in {"1", "true", "yes"}
+    broker_trust_basic_auth: bool = _env_bool(
+        "BROKER_TRUST_BASIC_AUTH",
+        default=_default_broker_trust_basic_auth(env),
+    )
 
     # S3 hardening: when True AND ENV=production, get_settings() fails closed
     # if any dev sentinel secret is still active (not just logs an error).
-    strict_secrets: bool = os.getenv("STRICT_SECRETS", "false").lower() in {"1", "true", "yes"}
+    # Production defaults to strict; local dev remains permissive.
+    strict_secrets: bool = _env_bool(
+        "STRICT_SECRETS",
+        default=_default_strict_secrets(env),
+    )
 
     # HS256 JWT secret for tenant-aware Phase-3 authorization. Real
     # deployments swap in JWKS-based verification against the agency IdP
@@ -99,7 +125,7 @@ class Settings:
 @lru_cache
 def get_settings() -> Settings:
     s = Settings()
-    if s.env.lower() in {"production", "prod"}:
+    if _is_production(s.env):
         live = [k for k, v in _DEV_SENTINELS.items() if getattr(s, k, None) == v]
         if live:
             logger.error(

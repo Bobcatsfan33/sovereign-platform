@@ -18,11 +18,30 @@ def test_dev_defaults_are_loaded() -> None:
     assert s.broker_username == "broker"
 
 
-def test_production_logs_warning_for_dev_defaults(
+def test_production_fails_closed_for_dev_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Production defaults to strict secret enforcement.
+
+    A deployment with dev sentinels active must fail at startup unless an
+    operator explicitly opts out with STRICT_SECRETS=false for a break-glass
+    migration window.
+    """
+    from sovereign import settings as settings_module
+
+    monkeypatch.setattr(settings_module.Settings, "env", "production")
+    monkeypatch.setattr(settings_module.Settings, "dev_bearer_token", "dev-token")
+    monkeypatch.setattr(settings_module.Settings, "broker_password", "broker")
+    monkeypatch.setattr(settings_module.Settings, "s3_secret_key", "minioadmin")
+    monkeypatch.setattr(settings_module.Settings, "strict_secrets", True)
+    settings_module.get_settings.cache_clear()
+
+    with pytest.raises(RuntimeError, match="refusing to start in production"):
+        settings_module.get_settings()
+
+
+def test_production_logs_warning_for_dev_defaults_when_strict_disabled(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """When ENV=production and the dev sentinels are still in place,
-    get_settings() emits an ERROR-level log line listing the keys."""
+    """Explicitly disabling strict mode keeps the legacy warning behavior."""
     from sovereign import settings as settings_module
 
     monkeypatch.setenv("ENV", "production")
@@ -31,6 +50,7 @@ def test_production_logs_warning_for_dev_defaults(
     monkeypatch.setattr(settings_module.Settings, "broker_password", "broker")
     monkeypatch.setattr(settings_module.Settings, "s3_secret_key", "minioadmin")
     monkeypatch.setattr(settings_module.Settings, "env", "production")
+    monkeypatch.setattr(settings_module.Settings, "strict_secrets", False)
     settings_module.get_settings.cache_clear()
 
     caplog.set_level(logging.ERROR)
@@ -40,6 +60,23 @@ def test_production_logs_warning_for_dev_defaults(
     assert any("dev defaults are still active" in m for m in messages)
     assert any("dev_bearer_token" in m for m in messages)
 
+
+def test_basic_auth_rbac_bypass_defaults_off_in_production() -> None:
+    """The OSB Basic compatibility path should not be trusted by default in prod."""
+    from sovereign import settings as settings_module
+
+    assert settings_module._default_broker_trust_basic_auth("production") is False
+    assert settings_module._default_broker_trust_basic_auth("prod") is False
+    assert settings_module._default_broker_trust_basic_auth("dev") is True
+
+
+def test_strict_secrets_defaults_on_in_production() -> None:
+    """Production should fail closed unless an operator explicitly opts out."""
+    from sovereign import settings as settings_module
+
+    assert settings_module._default_strict_secrets("production") is True
+    assert settings_module._default_strict_secrets("prod") is True
+    assert settings_module._default_strict_secrets("dev") is False
 
 def test_no_hardcoded_credentials_in_source() -> None:
     """Smoke check that the store modules don't carry hardcoded AWS creds."""
