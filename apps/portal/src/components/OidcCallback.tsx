@@ -13,12 +13,14 @@ export default function OidcCallback({
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    try {
-      onAuthenticated(completeOidcLogin());
-      navigate("/", { replace: true });
-    } catch (exc) {
-      setError(exc instanceof Error ? exc.message : "OIDC login failed");
-    }
+    void completeOidcLogin()
+      .then((auth) => {
+        onAuthenticated(auth);
+        navigate("/", { replace: true });
+      })
+      .catch((exc: unknown) => {
+        setError(exc instanceof Error ? exc.message : "OIDC login failed");
+      });
   }, [navigate, onAuthenticated]);
 
   if (error) {

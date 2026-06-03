@@ -47,7 +47,7 @@ Severity scale:
 | 1.7-A | Sprint 9 branch | `sovereign_instances` now has an `organization_guid` GSI used by tenant-scoped `list_instances`. |
 | 5.2-A | Sprint 10 branch | NGINX front-door overlay applies RPS, burst, connection, TLS, and body-size controls to broker/audit routes. |
 | 5.2-H | Sprint 10 branch | Kyverno admission overlay verifies cosign keyless signatures, digests, and SLSA provenance for chassis images. |
-| 5.2-F | Sprint 11 branch | Portal OIDC callback validates stored `state`, token `nonce`, and `exp` before accepting the bearer token. |
+| 5.2-F | Sprint 13 branch | Portal OIDC uses authorization code + PKCE and validates stored `state`, returned `iss`, `aud`, `nonce`, and `exp` before accepting the token endpoint result. |
 
 ## How an assessor uses this file
 

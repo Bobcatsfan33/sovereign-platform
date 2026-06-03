@@ -126,7 +126,9 @@ export default function Login() {
       {hasOidc ? (
         <button
           type="button"
-          onClick={() => beginOidcLogin()}
+          onClick={() => {
+            void beginOidcLogin();
+          }}
           className="mt-3 w-full rounded border border-blue-700 px-4 py-2 text-sm font-medium text-blue-800 hover:bg-blue-50 focus:outline-2 focus:outline-amber-300"
         >
           Sign in with agency IdP
