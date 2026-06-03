@@ -124,6 +124,8 @@ class AuditEvent(BaseModel):
     resource: str
     decision: str = "allow"
     metadata: dict[str, Any] = Field(default_factory=dict)
+    previous_hash: str | None = None
+    event_hash: str | None = None
 
 
 class PolicyRequest(BaseModel):

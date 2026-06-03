@@ -53,6 +53,7 @@ from sovereign.models import (
     ServiceInstance,
     UpdateRequest,
 )
+from sovereign.observability import install_metrics_endpoint
 from sovereign.packs import discover_packs, registered_packs
 from sovereign.packs.policy_bundles import collect_policy_bundle_dirs
 from sovereign.policy import PolicyClient, build_policy_input
@@ -92,6 +93,15 @@ app = FastAPI(title="Sovereign Platform — OSB Broker", version="0.4.0", lifesp
 install_problem_detail_handlers(app, service_name="broker")
 install_cors(app)
 install_rate_limit(app)
+install_metrics_endpoint(
+    app,
+    service="broker",
+    extra_gauges=lambda: {
+        "broker_renderers_registered": len(renderer_registry.service_types()),
+        "broker_connectors_registered": len(connector_registry.connector_types()),
+        "broker_packs_registered": len(registered_packs()),
+    },
+)
 
 security = HTTPBasic(auto_error=False)
 store = Store()

@@ -25,6 +25,7 @@ from sovereign.errors import install_problem_detail_handlers
 from sovereign.executors import register_default_executors
 from sovereign.executors import registry as executor_registry
 from sovereign.models import RenderRequest
+from sovereign.observability import install_metrics_endpoint
 from sovereign.packs import discover_packs, registered_packs
 from sovereign.packs.policy_bundles import collect_policy_bundle_dirs
 from sovereign.ratelimit import install_rate_limit
@@ -46,6 +47,15 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title="Sovereign Platform — Envoy Control Plane", version="0.2.0", lifespan=lifespan)
 install_rate_limit(app)
 install_problem_detail_handlers(app, service_name="control-plane")
+install_metrics_endpoint(
+    app,
+    service="control-plane",
+    extra_gauges=lambda: {
+        "control_plane_renderers_registered": len(registry.service_types()),
+        "control_plane_executors_registered": len(executor_registry.kinds()),
+        "control_plane_packs_registered": len(registered_packs()),
+    },
+)
 
 audit = Audit(service="control-plane")
 

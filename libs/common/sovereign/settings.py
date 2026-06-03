@@ -129,6 +129,13 @@ class Settings:
     # events survive a ClickHouse outage that outlasts the buffer.
     audit_spool_path: str = os.getenv("AUDIT_SPOOL_PATH", "")
 
+    # Enterprise audit export. When set, the audit service posts each
+    # accepted, hash-chained event to this endpoint as JSON. Export is
+    # best-effort so the local audit trail remains the source of record.
+    siem_webhook_url: str = os.getenv("SIEM_WEBHOOK_URL", "")
+    siem_webhook_token: str = os.getenv("SIEM_WEBHOOK_TOKEN", "")
+    siem_webhook_timeout_seconds: float = float(os.getenv("SIEM_WEBHOOK_TIMEOUT_SECONDS", "2"))
+
     # Step 0.3: secret-material backend selector. Only "env" ships in
     # the chassis (SOVEREIGN_SECRET_<NAME> vars); production registers a
     # Vault/Secrets-Manager provider via set_secrets_provider().
