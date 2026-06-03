@@ -1,0 +1,410 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sovereign-platform
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sovereign-config
+  namespace: sovereign-platform
+data:
+  ENV: production
+  AWS_REGION: us-gov-west-1
+  CONFIG_BUCKET: sovereign-configs-prod
+  OPA_URL: http://opa:8181
+  OPA_DECISION_PATH: v1/data/sovereign/decision
+  CONTROL_PLANE_URL: http://control-plane:8090
+  AUDIT_SERVICE_URL: http://audit-service:8086
+  METERING_SERVICE_URL: http://metering-service:8087
+  SHARED_BEARER_AUTH_ENABLED: "false"
+  WORKLOAD_IDENTITY_ENABLED: "true"
+  REQUIRE_OIDC: "true"
+  REQUIRE_MANAGED_SECRETS: "true"
+  SECRETS_PROVIDER: aws-secrets-manager
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sovereign-runtime
+  namespace: sovereign-platform
+type: Opaque
+stringData:
+  OIDC_ISSUER_URL: replace-me
+  OIDC_AUDIENCE: replace-me
+  ALLOWED_WORKLOAD_IDENTITIES: spiffe://sovereign-platform/broker,spiffe://sovereign-platform/control-plane,spiffe://sovereign-platform/audit-service,spiffe://sovereign-platform/metering-service
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: sovereign-platform
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: chassis-internal
+  namespace: sovereign-platform
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector: {}
+  egress:
+    - to:
+        - podSelector: {}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 443
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: broker
+  namespace: sovereign-platform
+  annotations:
+    eks.amazonaws.com/role-arn: replace-with-broker-irsa-role
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: control-plane
+  namespace: sovereign-platform
+  annotations:
+    eks.amazonaws.com/role-arn: replace-with-control-plane-irsa-role
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: audit-service
+  namespace: sovereign-platform
+  annotations:
+    eks.amazonaws.com/role-arn: replace-with-audit-irsa-role
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: metering-service
+  namespace: sovereign-platform
+  annotations:
+    eks.amazonaws.com/role-arn: replace-with-metering-irsa-role
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: portal
+  namespace: sovereign-platform
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: opa
+  namespace: sovereign-platform
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: broker
+  namespace: sovereign-platform
+spec:
+  replicas: 3
+  selector:
+    matchLabels: { app: broker }
+  template:
+    metadata:
+      labels: { app: broker }
+    spec:
+      serviceAccountName: broker
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: broker
+          image: ghcr.io/bobcatsfan33/sovereign-platform-broker:0.1.0
+          imagePullPolicy: IfNotPresent
+          ports: [{ name: http, containerPort: 8080 }]
+          envFrom:
+            - configMapRef: { name: sovereign-config }
+            - secretRef: { name: sovereign-runtime }
+          readinessProbe: { httpGet: { path: /healthz, port: http }, initialDelaySeconds: 5, periodSeconds: 10 }
+          livenessProbe: { httpGet: { path: /healthz, port: http }, initialDelaySeconds: 15, periodSeconds: 20 }
+          resources:
+            requests: { cpu: 250m, memory: 256Mi }
+            limits: { cpu: "1", memory: 1Gi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+            readOnlyRootFilesystem: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: broker
+  namespace: sovereign-platform
+spec:
+  selector: { app: broker }
+  ports: [{ name: http, port: 8080, targetPort: http }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: control-plane
+  namespace: sovereign-platform
+spec:
+  replicas: 3
+  selector:
+    matchLabels: { app: control-plane }
+  template:
+    metadata:
+      labels: { app: control-plane }
+    spec:
+      serviceAccountName: control-plane
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: control-plane
+          image: ghcr.io/bobcatsfan33/sovereign-platform-control-plane:0.1.0
+          ports: [{ name: http, containerPort: 8090 }]
+          envFrom:
+            - configMapRef: { name: sovereign-config }
+            - secretRef: { name: sovereign-runtime }
+          readinessProbe: { httpGet: { path: /healthz, port: http }, initialDelaySeconds: 5, periodSeconds: 10 }
+          livenessProbe: { httpGet: { path: /healthz, port: http }, initialDelaySeconds: 15, periodSeconds: 20 }
+          resources:
+            requests: { cpu: 250m, memory: 256Mi }
+            limits: { cpu: "1", memory: 1Gi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+            readOnlyRootFilesystem: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: control-plane
+  namespace: sovereign-platform
+spec:
+  selector: { app: control-plane }
+  ports: [{ name: http, port: 8090, targetPort: http }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: audit-service
+  namespace: sovereign-platform
+spec:
+  replicas: 3
+  selector:
+    matchLabels: { app: audit-service }
+  template:
+    metadata:
+      labels: { app: audit-service }
+    spec:
+      serviceAccountName: audit-service
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: audit-service
+          image: ghcr.io/bobcatsfan33/sovereign-platform-audit-service:0.1.0
+          ports: [{ name: http, containerPort: 8086 }]
+          envFrom:
+            - configMapRef: { name: sovereign-config }
+            - secretRef: { name: sovereign-runtime }
+          readinessProbe: { httpGet: { path: /healthz, port: http }, initialDelaySeconds: 5, periodSeconds: 10 }
+          livenessProbe: { httpGet: { path: /healthz, port: http }, initialDelaySeconds: 15, periodSeconds: 20 }
+          resources:
+            requests: { cpu: 250m, memory: 256Mi }
+            limits: { cpu: "1", memory: 1Gi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+            readOnlyRootFilesystem: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: audit-service
+  namespace: sovereign-platform
+spec:
+  selector: { app: audit-service }
+  ports: [{ name: http, port: 8086, targetPort: http }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: metering-service
+  namespace: sovereign-platform
+spec:
+  replicas: 3
+  selector:
+    matchLabels: { app: metering-service }
+  template:
+    metadata:
+      labels: { app: metering-service }
+    spec:
+      serviceAccountName: metering-service
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: metering-service
+          image: ghcr.io/bobcatsfan33/sovereign-platform-metering-service:0.1.0
+          ports: [{ name: http, containerPort: 8087 }]
+          envFrom:
+            - configMapRef: { name: sovereign-config }
+            - secretRef: { name: sovereign-runtime }
+          readinessProbe: { httpGet: { path: /healthz, port: http }, initialDelaySeconds: 5, periodSeconds: 10 }
+          livenessProbe: { httpGet: { path: /healthz, port: http }, initialDelaySeconds: 15, periodSeconds: 20 }
+          resources:
+            requests: { cpu: 250m, memory: 256Mi }
+            limits: { cpu: "1", memory: 1Gi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+            readOnlyRootFilesystem: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: metering-service
+  namespace: sovereign-platform
+spec:
+  selector: { app: metering-service }
+  ports: [{ name: http, port: 8087, targetPort: http }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: portal
+  namespace: sovereign-platform
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: portal }
+  template:
+    metadata:
+      labels: { app: portal }
+    spec:
+      serviceAccountName: portal
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: portal
+          image: ghcr.io/bobcatsfan33/sovereign-platform-portal:0.1.0
+          ports: [{ name: http, containerPort: 8080 }]
+          readinessProbe: { httpGet: { path: /, port: http }, initialDelaySeconds: 5, periodSeconds: 10 }
+          livenessProbe: { httpGet: { path: /, port: http }, initialDelaySeconds: 15, periodSeconds: 20 }
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+            readOnlyRootFilesystem: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: portal
+  namespace: sovereign-platform
+spec:
+  selector: { app: portal }
+  ports: [{ name: http, port: 8088, targetPort: http }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opa
+  namespace: sovereign-platform
+spec:
+  replicas: 3
+  selector:
+    matchLabels: { app: opa }
+  template:
+    metadata:
+      labels: { app: opa }
+    spec:
+      serviceAccountName: opa
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: opa
+          image: openpolicyagent/opa:1.6.0-rootless
+          args: ["run", "--server", "--addr=0.0.0.0:8181", "/policies"]
+          ports: [{ name: http, containerPort: 8181 }]
+          volumeMounts:
+            - name: policies
+              mountPath: /policies
+              readOnly: true
+          readinessProbe: { httpGet: { path: /health, port: http }, initialDelaySeconds: 5, periodSeconds: 10 }
+          livenessProbe: { httpGet: { path: /health, port: http }, initialDelaySeconds: 15, periodSeconds: 20 }
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+            readOnlyRootFilesystem: true
+      volumes:
+        - name: policies
+          configMap:
+            name: opa-policies
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: opa
+  namespace: sovereign-platform
+spec:
+  selector: { app: opa }
+  ports: [{ name: http, port: 8181, targetPort: http }]
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: broker
+  namespace: sovereign-platform
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels: { app: broker }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: control-plane
+  namespace: sovereign-platform
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels: { app: control-plane }
