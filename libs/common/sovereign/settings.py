@@ -35,6 +35,14 @@ def _default_strict_secrets(env: str) -> bool:
     return _is_production(env)
 
 
+def _default_shared_bearer_auth_enabled(env: str) -> bool:
+    return not _is_production(env)
+
+
+def _default_require_oidc(env: str) -> bool:
+    return _is_production(env)
+
+
 class Settings:
     # Environment marker — "dev" locally, "production" in real deployments.
     env: str = os.getenv("ENV", "dev")
@@ -66,6 +74,10 @@ class Settings:
     broker_username: str = os.getenv("BROKER_USERNAME", "broker")
     broker_password: str = os.getenv("BROKER_PASSWORD", "broker")
     dev_bearer_token: str = os.getenv("DEV_BEARER_TOKEN", "dev-token")
+    shared_bearer_auth_enabled: bool = _env_bool(
+        "SHARED_BEARER_AUTH_ENABLED",
+        default=_default_shared_bearer_auth_enabled(env),
+    )
 
     # S1 hardening: when False, HTTP Basic (OSB) callers go through the full
     # RBAC pipeline like JWT callers instead of being trusted. Defaults True
@@ -94,6 +106,7 @@ class Settings:
     # check is enabled when audience is non-empty.
     oidc_issuer_url: str = os.getenv("OIDC_ISSUER_URL", "")
     oidc_audience: str = os.getenv("OIDC_AUDIENCE", "")
+    require_oidc: bool = _env_bool("REQUIRE_OIDC", default=_default_require_oidc(env))
 
     # Service identity — every service reports its own name to the audit
     # service so the trail says which component emitted the event.
@@ -140,4 +153,8 @@ def get_settings() -> Settings:
                     "refusing to start in production with dev sentinels active: "
                     + ", ".join(live)
                 )
+        if s.require_oidc and (not s.oidc_issuer_url or not s.oidc_audience):
+            raise RuntimeError(
+                "refusing to start in production without OIDC_ISSUER_URL and OIDC_AUDIENCE"
+            )
     return s

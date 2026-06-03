@@ -21,7 +21,14 @@ async def require_bearer(authorization: str | None = Header(default=None)) -> st
     `"dev-user"` — replaced with a real subject claim once OIDC lands in
     Phase 3). Raises 401 if the token is missing, 403 if it mismatches."""
 
-    token = get_settings().dev_bearer_token
+    s = get_settings()
+    if not s.shared_bearer_auth_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="shared bearer auth is disabled; configure workload identity",
+        )
+
+    token = s.dev_bearer_token
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

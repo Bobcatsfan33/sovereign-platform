@@ -67,15 +67,25 @@ Exit criteria:
 - Reconciliation corrects drift or records a terminal failure with operator
   evidence.
 
-### Sprint 2: Zero-Trust Service Security
+### Sprint 2A: Production Auth Guardrails
+
+Objective: prevent production deployments from silently using development auth.
+
+Exit criteria:
+
+- Shared bearer auth defaults off for production.
+- Services reject shared bearer requests when the compatibility path is
+  disabled.
+- Production startup requires OIDC issuer and audience configuration.
+- Broker JWT verification uses OIDC/JWKS when configured.
+
+### Sprint 2B: Zero-Trust Service Security
 
 Objective: remove development trust paths from the production boundary.
 
 Exit criteria:
 
-- Shared bearer token is dev-only.
 - Service-to-service identity uses mTLS or platform workload identity.
-- OIDC/JWKS is mandatory for production external callers.
 - Secrets resolve from a managed provider.
 - KMS-backed encryption and rotation are documented and tested.
 

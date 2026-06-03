@@ -45,3 +45,15 @@ def test_valid_token_returns_200() -> None:
     r = client.get("/protected", headers=AUTH_HEADER)
     assert r.status_code == 200
     assert r.json() == {"ok": "yes"}
+
+
+def test_shared_bearer_disabled_returns_503(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from sovereign import settings as settings_module
+
+    monkeypatch.setattr(settings_module.Settings, "shared_bearer_auth_enabled", False)
+    settings_module.get_settings.cache_clear()
+
+    client = TestClient(_app())
+    r = client.get("/protected", headers=AUTH_HEADER)
+    assert r.status_code == 503
+    assert "shared bearer auth is disabled" in r.json()["detail"]

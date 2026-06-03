@@ -63,6 +63,43 @@ async def test_require_user_invalid_token_raises_401() -> None:
     assert "invalid token" in exc.value.detail
 
 
+def test_decode_rejects_dev_jwt_when_oidc_required(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastapi import HTTPException
+    from sovereign import settings as settings_module
+    from sovereign.tenancy import jwt_auth
+
+    monkeypatch.setattr(settings_module.Settings, "oidc_issuer_url", "")
+    monkeypatch.setattr(settings_module.Settings, "require_oidc", True)
+    settings_module.get_settings.cache_clear()
+
+    with pytest.raises(HTTPException) as exc:
+        jwt_auth._decode("not-used")
+    assert exc.value.status_code == 401
+    assert "OIDC is required" in exc.value.detail
+
+
+def test_decode_uses_oidc_when_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    from sovereign import settings as settings_module
+    from sovereign.tenancy import jwt_auth
+
+    class FakeVerifier:
+        def verify(self, token: str) -> dict[str, Any]:
+            assert token == "oidc-token"
+            return {"sub": "alice@gov", "tid": "cade2", "groups": ["team"]}
+
+    monkeypatch.setattr(settings_module.Settings, "oidc_issuer_url", "https://idp.test")
+    monkeypatch.setattr(settings_module.Settings, "oidc_audience", "sovereign")
+    monkeypatch.setattr(settings_module.Settings, "require_oidc", True)
+    monkeypatch.setattr(jwt_auth, "_oidc_verifier", lambda _issuer, _aud: FakeVerifier())
+    settings_module.get_settings.cache_clear()
+
+    claims = jwt_auth._decode("oidc-token")
+    assert claims["sub"] == "alice@gov"
+    assert claims["groups"] == ["team"]
+
+
 async def test_require_user_expired_token_raises_401() -> None:
     from fastapi import HTTPException
     from sovereign.settings import get_settings

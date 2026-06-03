@@ -25,6 +25,7 @@ Usage in a FastAPI route::
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 
 import jwt
 from fastapi import Header, HTTPException, status
@@ -46,8 +47,33 @@ class TokenUser:
     raw: dict
 
 
+@lru_cache
+def _oidc_verifier(issuer_url: str, audience: str):
+    from ..idp.oidc import OidcVerifier
+
+    return OidcVerifier(issuer_url=issuer_url, audience=audience or None)
+
+
 def _decode(token: str) -> dict:
     s = get_settings()
+    if s.oidc_issuer_url:
+        try:
+            return _oidc_verifier(s.oidc_issuer_url, s.oidc_audience).verify(token)
+        except jwt.ExpiredSignatureError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="token expired"
+            ) from exc
+        except jwt.InvalidTokenError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail=f"invalid token: {exc}"
+            ) from exc
+
+    if s.require_oidc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="OIDC is required; configure OIDC_ISSUER_URL and OIDC_AUDIENCE",
+        )
+
     try:
         return jwt.decode(token, s.dev_jwt_secret, algorithms=JWT_ALGORITHMS)
     except jwt.ExpiredSignatureError as exc:
