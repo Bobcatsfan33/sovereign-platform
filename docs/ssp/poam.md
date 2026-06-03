@@ -18,8 +18,8 @@ Severity scale:
 | ID | Severity | Title | Source | Owner | Target | Status |
 | --- | --- | --- | --- | --- | --- | --- |
 | 5.4-A | Medium | Switch chassis container base from `python:3.11-slim` to a FIPS-validated Python build | SC-13, IA-7 | Platform Eng | 2026-Q4 | open |
-| 5.4-B | Low | Pin `openpolicyagent/opa` image to a specific tag (currently `:latest-rootless`) | SA-22 | Platform Eng | 2026-Q3 | closed — pinned `openpolicyagent/opa:1.6.0-rootless` in commit `c403194` |
 | 5.4-CVE-OPENSSL | Medium | 7 OpenSSL CVEs (CVE-2025-15467, CVE-2025-69421, CVE-2026-28387 .. -28390, CVE-2026-31789) ignored in `.trivyignore` pending Debian point-release availability | SC-13, SI-2 | Platform Eng | 2026-Q3 | open — quarterly review next 2026-08 |
+| 5.4-CVE-libxml2 | Medium | Portal `nginx:1.27.4-alpine` inherits CVE-2026-6732 in libxml2 on architectures where the Alpine 3.21 fix has not propagated | SI-2, SA-22 | Platform Eng | 2026-Q3 | open — remove `.trivyignore` entry when `libxml2>=2.13.9-r1` resolves on x86_64 |
 | 5.4-CVE-GNUTLS | Medium | 7 GnuTLS CVEs ignored in `.trivyignore`; gnutls is not linked by any chassis service | SC-13, SI-2 | Platform Eng | 2026-Q3 | open — quarterly review next 2026-08 |
 | 5.4-CVE-MISC | Low | 10 system-package CVEs (gnupg, libcap, sqlite, xz, pam, perl, setuptools, wheel) ignored in `.trivyignore`; build-time / out-of-call-graph for chassis runtime | SI-2 | Platform Eng | 2026-Q3 | open — quarterly review next 2026-08 |
 | 5.4-C | Low | Switch to chainguard/python distroless base to eliminate the inherited CVE allow-list entirely | SC-13, SA-22 | Platform Eng | 2026-Q4 | open — depends on FIPS validation status of chainguard's Python build |
@@ -33,6 +33,7 @@ Severity scale:
 | 0.5 | 2026-05-23 (commit `9033eee`) | RFC 7807 problem detail across every endpoint. |
 | 0.6 | 2026-05-23 (commit `6072ea0`) | Pydantic Envoy-v3 validation gate before S3 write. |
 | 0.7 | 2026-05-23 (commit `9fbb0d3`) | Hardcoded credentials removed; production sentinel check added. |
+| 5.4-B | 2026-05-24 (commit `c403194`) | OPA image pinned to `openpolicyagent/opa:1.6.0-rootless`; no `:latest-rootless` dependency remains. |
 | 2.* | 2026-05-23 (commits `cb624ae` + `2bd7e2b`) | Policy engine, layered decision, broker gate, decision audit. |
 | 3.* | 2026-05-23 (commits `2ff6b88` / `4075e85` / `18473b6`) | Tenancy, RBAC, JWT, OIDC, quota. |
 | 4.* | 2026-05-24 (commits `e6d78c7` / `99a7be5`) | Portal SPA + broker portal endpoints + axe-clean a11y. |

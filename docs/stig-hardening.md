@@ -28,13 +28,14 @@ Every chassis image satisfies the following:
 | 8 | Site-packages owned by root, app code by service user | `pip install` runs as root; `chown -R sovereign:sovereign /app` runs after install, so the runtime user can read but not modify Python modules. |
 | 9 | nginx runs on an unprivileged port | The portal nginx config is sed-rewritten from `:80` to `:8080` so the unprivileged `nginx` user can bind it. Host published as :8088. |
 | 10 | Response-header hardening | `nginx.conf` sets `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`. |
+| 11 | Image signing and provenance verification | The Docker CI job signs images with keyless cosign and uploads GitHub build provenance; `deploy/k8s/admission-cosign-policy.yaml` verifies keyless signatures, digest pinning, and SLSA provenance before admission. |
 
 ## Chassis-side hardening (POA&M open items)
 
 | Item | Severity | Tracking |
 | --- | --- | --- |
 | Switch the Python base from Debian to a FIPS-validated Python build | Medium | POA&M 5.4-A in [`ssp/poam.md`](./ssp/poam.md) |
-| Sign every chassis image with cosign at build, verify at admission | Medium | POA&M 5.2-H |
+| Remove inherited CVE allow-list entries once fixed packages are available in the pinned base images | Medium | POA&M 5.4-CVE-* in [`ssp/poam.md`](./ssp/poam.md) |
 | Switch ClickHouse / MinIO base images to STIG-hardened distros | Medium | Tracked in agency IaC; out of scope for this repo |
 
 ## Inherited from the hosting environment
