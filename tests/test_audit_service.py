@@ -84,6 +84,14 @@ class TestHealthz:
         assert body["clickhouse_connected"] is True
 
 
+class TestRetention:
+    def test_ttl_clause_uses_days(self, audit_service_module: Any) -> None:
+        assert audit_service_module._ttl_clause(730) == "TTL ts + INTERVAL 730 DAY DELETE"
+
+    def test_ttl_clause_can_be_disabled(self, audit_service_module: Any) -> None:
+        assert audit_service_module._ttl_clause(0) == ""
+
+
 class TestPostEvents:
     def test_requires_bearer(self, audit_app: tuple[Any, FakeClickHouseClient]) -> None:
         client = TestClient(audit_app[0])

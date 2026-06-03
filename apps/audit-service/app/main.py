@@ -164,6 +164,7 @@ def _connect() -> Any:
             s = get_settings()
             client = clickhouse_connect.get_client(host=s.clickhouse_host, port=s.clickhouse_port)
             client.command(f"CREATE DATABASE IF NOT EXISTS {s.clickhouse_database}")
+            ttl_clause = _ttl_clause(s.audit_retention_days)
             client.command(
                 f"""
                 CREATE TABLE IF NOT EXISTS {s.clickhouse_database}.audit_events (
@@ -180,6 +181,7 @@ def _connect() -> Any:
                   signature Nullable(String)
                 ) ENGINE = MergeTree
                 ORDER BY (ts, tenant_id, action)
+                {ttl_clause}
                 """
             )
             client.command(
@@ -198,6 +200,10 @@ def _connect() -> Any:
                 f"ALTER TABLE {s.clickhouse_database}.audit_events "
                 "ADD COLUMN IF NOT EXISTS signature Nullable(String)"
             )
+            if ttl_clause:
+                client.command(
+                    f"ALTER TABLE {s.clickhouse_database}.audit_events MODIFY {ttl_clause}"
+                )
             _client = client
             _table_ready = True
             logger.info("connected to ClickHouse and ensured audit_events table")
@@ -205,6 +211,12 @@ def _connect() -> Any:
         except Exception as exc:  # noqa: BLE001 — broad on purpose, degrade gracefully
             logger.warning("ClickHouse unavailable, buffering events: %s", exc)
             return None
+
+
+def _ttl_clause(days: int) -> str:
+    if days <= 0:
+        return ""
+    return f"TTL ts + INTERVAL {days} DAY DELETE"
 
 
 def _row(event: AuditEvent) -> list[Any]:

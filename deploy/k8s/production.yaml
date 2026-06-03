@@ -21,6 +21,7 @@ data:
   CONTROL_PLANE_URL: http://control-plane:8090
   AUDIT_SERVICE_URL: http://audit-service:8086
   METERING_SERVICE_URL: http://metering-service:8087
+  AUDIT_RETENTION_DAYS: "730"
   SHARED_BEARER_AUTH_ENABLED: "false"
   WORKLOAD_IDENTITY_ENABLED: "true"
   REQUIRE_OIDC: "true"

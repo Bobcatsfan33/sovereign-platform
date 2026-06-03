@@ -54,6 +54,12 @@ def test_k8s_network_policy_default_deny_exists() -> None:
     assert any(p["metadata"]["name"] == "default-deny" for p in policies)
 
 
+def test_k8s_config_exposes_audit_retention_days() -> None:
+    config_maps = [d for d in _k8s_docs() if d.get("kind") == "ConfigMap"]
+    config = next(c for c in config_maps if c["metadata"]["name"] == "sovereign-config")
+    assert config["data"]["AUDIT_RETENTION_DAYS"] == "730"
+
+
 def test_terraform_hardening_controls_present() -> None:
     terraform = "\n".join(
         p.read_text() for p in sorted((ROOT / "infra" / "terraform").rglob("*.tf"))

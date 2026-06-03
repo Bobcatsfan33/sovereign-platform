@@ -28,7 +28,7 @@ The manifest set includes:
 
 Environment-specific overlays must replace placeholder OIDC values, workload
 identity allow-lists, IRSA role ARNs, image tags/digests, OPA policy ConfigMap
-content, and ingress/TLS resources.
+content, audit retention (`AUDIT_RETENTION_DAYS`), and ingress/TLS resources.
 
 ## Terraform
 

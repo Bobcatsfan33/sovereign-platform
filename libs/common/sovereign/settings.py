@@ -136,6 +136,7 @@ class Settings:
     # ring buffer only). Set to a writable path in production so audit
     # events survive a ClickHouse outage that outlasts the buffer.
     audit_spool_path: str = os.getenv("AUDIT_SPOOL_PATH", "")
+    audit_retention_days: int = int(os.getenv("AUDIT_RETENTION_DAYS", "730"))
 
     # Enterprise audit export. When set, the audit service posts each
     # accepted, hash-chained event to this endpoint as JSON. Export is
