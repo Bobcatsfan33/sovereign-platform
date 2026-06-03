@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 from moto import mock_aws
+from sovereign.renderers import TeardownResult
 
 from .conftest import BEARER
 
@@ -181,6 +182,38 @@ def test_full_lifecycle(broker_app: Any) -> None:
 
 
 @mock_aws
+def test_deprovision_invokes_renderer_teardown(
+    broker_app: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    torn_down: list[str] = []
+
+    class FakeRenderer:
+        async def teardown(self, instance: Any) -> TeardownResult:
+            torn_down.append(instance.instance_id)
+            return TeardownResult(ok=True, removed=[f"instance/{instance.instance_id}"])
+
+    with TestClient(broker_app.app) as client:
+        r = client.put(
+            "/v2/service_instances/teardown-me",
+            json=_provision_body(),
+            auth=_broker_creds(),
+        )
+        assert r.status_code == 201, r.text
+
+        monkeypatch.setattr(
+            broker_app.renderer_registry,
+            "get",
+            lambda _service_type: FakeRenderer(),
+        )
+
+        r = client.delete("/v2/service_instances/teardown-me", auth=_broker_creds())
+        assert r.status_code == 200, r.text
+
+    assert torn_down == ["teardown-me"]
+    assert "instance.torn_down" in [a for a, _ in broker_app._test_emitted]
+
+
+@mock_aws
 def test_update_increments_version(broker_app: Any) -> None:
     instance_id = "demo-update"
     with TestClient(broker_app.app) as client:
@@ -224,10 +257,11 @@ def test_bind_unknown_instance_returns_404(broker_app: Any) -> None:
 
 
 def test_healthz_open(broker_app: Any) -> None:
-    client = TestClient(broker_app.app)
-    r = client.get("/healthz")
-    assert r.status_code == 200
-    assert r.json()["status"] == "ok"
+    with TestClient(broker_app.app) as client:
+        r = client.get("/healthz")
+        assert r.status_code == 200
+        assert r.json()["status"] == "ok"
+        assert "envoy-snapshot" in r.json()["executors"]
 
 
 # ── Async provisioning (Step 0.1) ──────────────────────────────────────

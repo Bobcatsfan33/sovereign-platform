@@ -36,6 +36,8 @@ from sovereign.connectors.github import GitHubConnector  # noqa: F401
 from sovereign.connectors.s3 import S3Connector  # noqa: F401
 from sovereign.cors import install_cors
 from sovereign.errors import install_problem_detail_handlers
+from sovereign.executors import register_default_executors
+from sovereign.executors import registry as executor_registry
 from sovereign.metering import Metering
 from sovereign.models import (
     Binding,
@@ -514,6 +516,7 @@ def _ensure_tenancy_tables() -> None:
 
 
 def _startup() -> None:
+    register_default_executors()
     try:
         store.ensure_tables()
     except Exception:  # noqa: BLE001
@@ -532,6 +535,7 @@ def healthz() -> dict[str, Any]:
         "status": "ok",
         "service": "broker",
         "renderers": renderer_registry.service_types(),
+        "executors": executor_registry.kinds(),
         "connectors": connector_registry.connector_types(),
         "packs": registered_packs(),
         "policy_bundles": collect_policy_bundle_dirs(),
@@ -680,6 +684,56 @@ async def _finalize_provision_async(
         )
 
 
+async def _teardown_instance(
+    inst: ServiceInstance,
+    *,
+    caller: Caller,
+    tenant_id: str,
+) -> None:
+    """Best-effort teardown of live artifacts before desired state deletion."""
+    renderer = renderer_registry.get(inst.service_id)
+    if renderer is None:
+        logger.warning("deprovision skipped teardown for %s: no renderer", inst.instance_id)
+        audit.emit(
+            "instance.teardown_skipped",
+            inst.instance_id,
+            actor=caller.user.principal,
+            tenant_id=tenant_id,
+            decision="deny",
+            metadata={"service_id": inst.service_id, "reason": "no renderer"},
+        )
+        return
+
+    try:
+        result = await renderer.teardown(inst)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("teardown raised for %s", inst.instance_id)
+        audit.emit(
+            "instance.teardown_failed",
+            inst.instance_id,
+            actor=caller.user.principal,
+            tenant_id=tenant_id,
+            decision="deny",
+            metadata={"service_id": inst.service_id, "reason": str(exc)},
+        )
+        return
+
+    action = "instance.torn_down" if result.ok else "instance.teardown_failed"
+    audit.emit(
+        action,
+        inst.instance_id,
+        actor=caller.user.principal,
+        tenant_id=tenant_id,
+        decision="allow" if result.ok else "deny",
+        metadata={
+            "service_id": inst.service_id,
+            "removed": result.removed,
+            "failed": result.failed,
+            "detail": result.detail,
+        },
+    )
+
+
 @app.put("/v2/service_instances/{instance_id}", status_code=201)
 async def provision(
     instance_id: str,
@@ -787,7 +841,7 @@ async def update(
 
 
 @app.delete("/v2/service_instances/{instance_id}")
-def deprovision(
+async def deprovision(
     instance_id: str, caller: Caller = Depends(state_change_identify)
 ) -> dict[str, Any]:
     inst = store.get_instance(instance_id)
@@ -795,6 +849,7 @@ def deprovision(
         raise HTTPException(status_code=status.HTTP_410_GONE, detail="instance already absent")
     tenant_id = _resolve_tenant_id(caller, inst.organization_guid)
     _enforce_rbac(caller, tenant_id=tenant_id, action="deprovision")
+    await _teardown_instance(inst, caller=caller, tenant_id=tenant_id)
     store.delete_instance(instance_id)
     audit.emit(
         "instance.deprovisioned",

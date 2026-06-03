@@ -29,19 +29,32 @@ Exit criteria:
 - Production Basic-auth RBAC bypass defaults off.
 - Python dependency audit and CycloneDX SBOM generation run in CI.
 
-### Sprint 1: Execution Loop
+### Sprint 1A: Execution Lifecycle Hooks
 
-Objective: make one service type provision real resources, not only render
-artifacts.
+Objective: make the existing renderer/executor lifecycle explicit in service
+startup and deprovision flows.
 
 Exit criteria:
 
-- Broker invokes validate/apply for rendered artifacts.
-- Apply failures set terminal failed OSB state.
+- Standard chassis executors are registered at broker/control-plane startup.
+- Health checks expose registered executor kinds.
+- Control-plane render continues to invoke render, validate, and apply.
 - Deprovision invokes renderer teardown.
+- Teardown emits audit evidence but remains best-effort.
+
+### Sprint 1B: Reconciliation Controller
+
+Objective: move from one-shot lifecycle calls to convergent desired-state
+operations.
+
+Exit criteria:
+
+- Apply failures set terminal failed OSB state with failed step detail.
 - One pilot pack proves end-to-end create/update/delete in a non-emulator
   environment.
 - Operation state includes retry-safe IDs, failure reason, and apply outputs.
+- Drift detection identifies actual-state mismatch for the pilot pack.
+- Reconciliation retries converge drift or records a terminal failure.
 
 ### Sprint 2: Zero-Trust Service Security
 

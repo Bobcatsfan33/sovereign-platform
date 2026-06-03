@@ -101,6 +101,7 @@ def test_get_config_404_for_missing(control_plane_app: Any) -> None:
 
 
 def test_healthz_open(control_plane_app: Any) -> None:
-    client = TestClient(control_plane_app.app)
-    r = client.get("/healthz")
-    assert r.status_code == 200
+    with TestClient(control_plane_app.app) as client:
+        r = client.get("/healthz")
+        assert r.status_code == 200
+        assert "envoy-snapshot" in r.json()["executors"]

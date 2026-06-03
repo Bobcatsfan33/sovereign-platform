@@ -41,6 +41,21 @@ from .shell import (
     WebhookExecutor,
 )
 
+
+def register_default_executors() -> None:
+    """Register the chassis-shipped executors.
+
+    Service startup calls this before serving traffic so any renderer that
+    delegates to ``apply_manifest()`` has the standard execution backends
+    available. The registry upserts by kind, so repeated calls are idempotent.
+    """
+    register_executor(NoopExecutor())
+    register_executor(KubernetesExecutor())
+    register_executor(HelmExecutor())
+    register_executor(TerraformExecutor())
+    register_executor(WebhookExecutor())
+
+
 __all__ = [
     "BaseExecutor",
     "ExecResult",
@@ -51,6 +66,7 @@ __all__ = [
     "WebhookExecutor",
     "apply_manifest",
     "get_executor",
+    "register_default_executors",
     "register_executor",
     "registry",
 ]

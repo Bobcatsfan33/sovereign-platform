@@ -22,6 +22,8 @@ from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import Depends, FastAPI, HTTPException, Response, status
 from sovereign.audit import Audit
 from sovereign.errors import install_problem_detail_handlers
+from sovereign.executors import register_default_executors
+from sovereign.executors import registry as executor_registry
 from sovereign.models import RenderRequest
 from sovereign.packs import discover_packs, registered_packs
 from sovereign.packs.policy_bundles import collect_policy_bundle_dirs
@@ -64,6 +66,7 @@ def _s3_client() -> Any:
 
 
 def _startup() -> None:
+    register_default_executors()
     # Discover packs first so the control plane can dispatch to pack
     # renderers, not just the chassis Envoy renderer.
     discover_packs()
@@ -84,6 +87,7 @@ def healthz() -> dict[str, Any]:
         "status": "ok",
         "service": "control-plane",
         "renderers": registry.service_types(),
+        "executors": executor_registry.kinds(),
         "packs": registered_packs(),
         "policy_bundles": collect_policy_bundle_dirs(),
     }
