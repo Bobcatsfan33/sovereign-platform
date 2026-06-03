@@ -126,6 +126,8 @@ class AuditEvent(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
     previous_hash: str | None = None
     event_hash: str | None = None
+    signature_key_id: str | None = None
+    signature: str | None = None
 
 
 class PolicyRequest(BaseModel):

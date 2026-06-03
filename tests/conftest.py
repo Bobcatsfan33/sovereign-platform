@@ -89,6 +89,8 @@ def control_plane_module() -> types.ModuleType:
 @pytest.fixture(autouse=True)
 def _clear_settings_cache() -> None:
     """`get_settings()` is lru_cached. Clear so per-test env tweaks take effect."""
+    from sovereign.audit_signing import reset_audit_signing_cache
     from sovereign.settings import get_settings
 
     get_settings.cache_clear()
+    reset_audit_signing_cache()

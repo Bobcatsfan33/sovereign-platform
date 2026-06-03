@@ -36,6 +36,20 @@ The audit service now hash-chains every accepted event:
 Accepted events are chained even when ClickHouse is unavailable and the event
 falls back to the in-memory buffer or durable spool.
 
+Audit rows can also carry an Ed25519 service signature:
+
+- `signature_key_id` identifies the active audit-service key.
+- `signature` signs the canonical event payload after hash chaining.
+- `REQUIRE_AUDIT_SIGNING=true` makes startup fail when key material is absent.
+
+Configure signing with:
+
+```bash
+AUDIT_SIGNATURE_KEY_ID=audit-service-2026q3
+AUDIT_SIGNING_PRIVATE_KEY_PEM="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"
+REQUIRE_AUDIT_SIGNING=true
+```
+
 ## SIEM Export
 
 Set `SIEM_WEBHOOK_URL` to export each accepted hash-chained audit event to a

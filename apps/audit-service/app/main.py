@@ -38,6 +38,7 @@ from typing import Any
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.responses import JSONResponse
+from sovereign.audit_signing import sign_audit_event
 from sovereign.audit_spool import AuditSpool
 from sovereign.cors import install_cors
 from sovereign.models import AuditEvent
@@ -82,7 +83,7 @@ install_metrics_endpoint(app, service="audit-service", extra_gauges=_metrics_gau
 
 def _canonical_event_payload(event: AuditEvent) -> str:
     return json.dumps(
-        event.model_dump(mode="json", exclude={"event_hash"}),
+        event.model_dump(mode="json", exclude={"event_hash", "signature_key_id", "signature"}),
         default=str,
         separators=(",", ":"),
         sort_keys=True,
@@ -104,6 +105,10 @@ def _ensure_chained(event: AuditEvent) -> AuditEvent:
     if event.event_hash:
         return event
     return _chain_event(event)
+
+
+def _prepare_event(event: AuditEvent) -> AuditEvent:
+    return sign_audit_event(_ensure_chained(event))
 
 
 def _export_to_siem(event: AuditEvent) -> None:
@@ -170,7 +175,9 @@ def _connect() -> Any:
                   decision String,
                   metadata String,
                   previous_hash Nullable(String),
-                  event_hash String
+                  event_hash String,
+                  signature_key_id Nullable(String),
+                  signature Nullable(String)
                 ) ENGINE = MergeTree
                 ORDER BY (ts, tenant_id, action)
                 """
@@ -182,6 +189,14 @@ def _connect() -> Any:
             client.command(
                 f"ALTER TABLE {s.clickhouse_database}.audit_events "
                 "ADD COLUMN IF NOT EXISTS event_hash String DEFAULT ''"
+            )
+            client.command(
+                f"ALTER TABLE {s.clickhouse_database}.audit_events "
+                "ADD COLUMN IF NOT EXISTS signature_key_id Nullable(String)"
+            )
+            client.command(
+                f"ALTER TABLE {s.clickhouse_database}.audit_events "
+                "ADD COLUMN IF NOT EXISTS signature Nullable(String)"
             )
             _client = client
             _table_ready = True
@@ -203,6 +218,8 @@ def _row(event: AuditEvent) -> list[Any]:
         json.dumps(event.metadata, default=str, sort_keys=True),
         event.previous_hash,
         event.event_hash or "",
+        event.signature_key_id,
+        event.signature,
     ]
 
 
@@ -216,6 +233,8 @@ _COLUMN_NAMES = [
     "metadata",
     "previous_hash",
     "event_hash",
+    "signature_key_id",
+    "signature",
 ]
 
 
@@ -225,7 +244,7 @@ def _flush_buffer(client: Any) -> int:
     rows: list[list[Any]] = []
     with _buffer_lock:
         while _buffer:
-            rows.append(_row(_ensure_chained(_buffer.popleft())))
+            rows.append(_row(_prepare_event(_buffer.popleft())))
     if not rows:
         return 0
     try:
@@ -255,6 +274,8 @@ def _event_from_row(row: list[Any]) -> AuditEvent:
         metadata=json.loads(row[6]) if row[6] else {},
         previous_hash=row[7] if len(row) > 7 else None,
         event_hash=row[8] if len(row) > 8 else None,
+        signature_key_id=row[9] if len(row) > 9 else None,
+        signature=row[10] if len(row) > 10 else None,
     )
 
 
@@ -280,7 +301,7 @@ def ingest_event(event: AuditEvent) -> dict[str, Any]:
     non-blocking. Always returns 202 unless validation fails (Pydantic
     handles that automatically with 422)."""
     s = get_settings()
-    event = _chain_event(event)
+    event = _prepare_event(event)
     client = _connect()
     key = f"{event.ts.isoformat()}|{event.tenant_id}|{event.action}|{event.resource}"
 
@@ -359,7 +380,7 @@ def query_events(
     where = f"WHERE {' AND '.join(filters)}" if filters else ""
     sql = (
         f"SELECT ts, tenant_id, actor, action, resource, decision, metadata, "
-        f"previous_hash, event_hash "
+        f"previous_hash, event_hash, signature_key_id, signature "
         f"FROM {s.clickhouse_database}.audit_events {where} "
         f"ORDER BY ts DESC LIMIT {limit}"
     )
@@ -383,6 +404,8 @@ def query_events(
             "metadata": json.loads(row[6]) if row[6] else {},
             "previous_hash": row[7] if len(row) > 7 else None,
             "event_hash": row[8] if len(row) > 8 else None,
+            "signature_key_id": row[9] if len(row) > 9 else None,
+            "signature": row[10] if len(row) > 10 else None,
         }
         for row in result.result_rows
     ]

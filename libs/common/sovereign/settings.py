@@ -51,6 +51,10 @@ def _default_workload_identity_enabled(env: str) -> bool:
     return _is_production(env)
 
 
+def _default_require_audit_signing(env: str) -> bool:
+    return _is_production(env)
+
+
 class Settings:
     # Environment marker — "dev" locally, "production" in real deployments.
     env: str = os.getenv("ENV", "dev")
@@ -139,6 +143,12 @@ class Settings:
     siem_webhook_url: str = os.getenv("SIEM_WEBHOOK_URL", "")
     siem_webhook_token: str = os.getenv("SIEM_WEBHOOK_TOKEN", "")
     siem_webhook_timeout_seconds: float = float(os.getenv("SIEM_WEBHOOK_TIMEOUT_SECONDS", "2"))
+    audit_signature_key_id: str = os.getenv("AUDIT_SIGNATURE_KEY_ID", "")
+    audit_signing_private_key_pem: str = os.getenv("AUDIT_SIGNING_PRIVATE_KEY_PEM", "")
+    require_audit_signing: bool = _env_bool(
+        "REQUIRE_AUDIT_SIGNING",
+        default=_default_require_audit_signing(env),
+    )
 
     # Step 0.3: secret-material backend selector. Only "env" ships in
     # the chassis (SOVEREIGN_SECRET_<NAME> vars); production registers a
@@ -193,5 +203,11 @@ def get_settings() -> Settings:
         if s.require_managed_secrets and (s.secrets_provider or "env").lower() == "env":
             raise RuntimeError(
                 "refusing to start in production with env-only secrets provider"
+            )
+        if s.require_audit_signing and (
+            not s.audit_signature_key_id or not s.audit_signing_private_key_pem
+        ):
+            raise RuntimeError(
+                "refusing to start in production without audit signing key material"
             )
     return s

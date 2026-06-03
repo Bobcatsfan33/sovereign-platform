@@ -20,7 +20,6 @@ Severity scale:
 | 5.2-A | Medium | Replace per-broker Basic-auth throttling with a front-door rate-limit policy | AC-7 | Platform Ops | 2026-Q3 | open — relies on agency LB |
 | 5.2-B | Low | Wire ClickHouse alert on policy-deny spike per principal | AC-2(11) (High overlay) | Platform Ops | 2026-Q4 | open |
 | 5.2-C | Low | Document ClickHouse `TTL` per agency in IaC samples | AU-11 | Platform Ops | 2026-Q3 | open |
-| 5.2-D | Medium | Sign audit rows with a service-account key for AU-10 non-repudiation | AU-10 (High overlay) | Platform Eng | 2026-Q4 | open |
 | 5.2-E | Low | Mandate security-reviewer agent pass on every PR | CM-3(7) (High overlay) | Platform Eng | 2026-Q3 | open |
 | 5.2-F | Medium | Enforce OIDC `nonce` on implicit-flow login | IA-2(8) | Platform Eng | 2026-Q3 | open |
 | 5.2-H | Medium | Cosign all container images at build, verify at admission | SI-7(1)+(6) (High overlay) | Platform Ops | 2026-Q3 | partially closed — CI signs and attests images after Trivy gate; admission verification remains environment overlay |
@@ -47,6 +46,7 @@ Severity scale:
 | 4.* | 2026-05-24 (commits `e6d78c7` / `99a7be5`) | Portal SPA + broker portal endpoints + axe-clean a11y. |
 | 3.5-A | Sprint 5 branch | `OidcVerifier` honors JWKS `max-age` and uses bounded stale keys during IdP outages. |
 | 5.2-G | Sprint 5 branch | `policies/base/authentication.rego` requires `mfa` in OIDC `amr` for JWT state-changing actions. |
+| 5.2-D | Sprint 6 branch | Audit rows can be signed with an Ed25519 service-account key; production can require signing key material at startup. |
 
 ## How an assessor uses this file
 

@@ -101,9 +101,11 @@ class TestPostEvents:
         assert body["buffered"] is False
         assert fake.inserts == 1
         # row shape matches the SUT's column order
-        assert len(fake.rows[0]) == 9
+        assert len(fake.rows[0]) == 11
         assert fake.rows[0][7] is None
         assert len(fake.rows[0][8]) == 64
+        assert fake.rows[0][9] is None
+        assert fake.rows[0][10] is None
 
     def test_hash_chains_accepted_events(
         self, audit_app: tuple[Any, FakeClickHouseClient]
