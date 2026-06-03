@@ -16,10 +16,10 @@ startup).
 
 | Control | Status | Implementation | Evidence |
 | --- | --- | --- | --- |
-| **CM-2** Baseline Configuration | implemented | The baseline is the git revision that built the running image. Container images are tagged `{repo}:{sha}` in CI; `latest` is set on push-to-main so rollback is `docker tag :sha :latest`. The Envoy config baseline for each instance is the immutable S3 artefact at v1. | `.github/workflows/ci.yml::docker-build`; `apps/control-plane/app/main.py::render` |
+| **CM-2** Baseline Configuration | implemented | The baseline is the git revision that built the running image. Container images are tagged with the git SHA in CI and published without mutable `latest` tags. The Envoy config baseline for each instance is the immutable S3 artefact at v1. | `.github/workflows/ci.yml::docker-build`; `apps/control-plane/app/main.py::render` |
 | **CM-2(2)** Automation Support | implemented | Every change to the chassis goes through the GitHub Actions pipeline: ruff + mypy + pytest + opa test + (Phase 5.2) trivy + multi-service docker build. Merges to `main` are blocked until all jobs pass. | `.github/workflows/ci.yml` |
 | **CM-3** Configuration Change Control | implemented | Every chassis change lands as a git commit with a structured message (feat/fix/chore + roadmap task ref). The `policy.evaluated` audit event records the policy-bundle version at evaluation time. Service-pack policy bundles are versioned in the pack manifest (Phase 1.9). | `git log --oneline`; `libs/common/sovereign/packs/__init__.py` |
-| **CM-3(2)** Test, Validate, and Document Changes | implemented | The 218-test pytest suite + 42 OPA tests + 7 portal a11y tests run on every PR. Every roadmap task lands as one commit with documentation in the commit body. | `.github/workflows/ci.yml::test`, `policy-test`, `portal` |
+| **CM-3(2)** Test, Validate, and Document Changes | implemented | The pytest suite, OPA tests, portal tests, SCA/SBOM, image scan, image signing, and provenance jobs run through CI. Every roadmap task lands as one commit with documentation in the commit body. | `.github/workflows/ci.yml`; `.github/pull_request_template.md` |
 | **CM-4** Impact Analyses | implemented (process) | The pack registration system (Phase 1.9) makes the per-pack impact surface explicit — a pack's `pack.toml` declares its renderers, connectors, catalogue entries, and policy bundles. The continuous monitor (5.2) verifies that registered packs and the running set match. | `libs/common/sovereign/packs/__init__.py` |
 | **CM-5** Access Restrictions for Change | implemented | Code changes require a PR review (GitHub branch protection — agency operational config, not in this repo). The OPA policy bundle is read-only mounted (`./policies:/policies:ro`); the chassis container has no write capability against the bundle. | `docker-compose.yml::opa` |
 | **CM-6** Configuration Settings | implemented | All settings load from `Settings` class (`libs/common/sovereign/settings.py`) which reads typed env vars with safe defaults. The Settings class also implements the production sentinel check: dev-default values (`dev-token`, `broker`/`broker`, `minioadmin`) log ERROR when ENV=production. | `libs/common/sovereign/settings.py::get_settings`; `tests/test_settings.py::test_production_logs_warning_for_dev_defaults` |
@@ -34,5 +34,5 @@ startup).
 
 | Additional | Note |
 | --- | --- |
-| CM-3(7) Review System Changes | Pair every PR with a security-reviewer-agent run; add to PR template (POA&M 5.2-E). |
+| CM-3(7) Review System Changes | PRs include a security-reviewer checklist covering auth, authz, tenancy, secrets, audit, retention, evidence, and tests. |
 | CM-8(3) Automated Unauthorised Component Detection | Trivy scan in CI (Phase 5.2) flags unexpected packages; pair with an SBOM diff. |

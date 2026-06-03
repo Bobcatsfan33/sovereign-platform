@@ -19,7 +19,6 @@ Severity scale:
 | --- | --- | --- | --- | --- | --- | --- |
 | 5.2-A | Medium | Replace per-broker Basic-auth throttling with a front-door rate-limit policy | AC-7 | Platform Ops | 2026-Q3 | open — relies on agency LB |
 | 5.2-B | Low | Wire ClickHouse alert on policy-deny spike per principal | AC-2(11) (High overlay) | Platform Ops | 2026-Q4 | open |
-| 5.2-E | Low | Mandate security-reviewer agent pass on every PR | CM-3(7) (High overlay) | Platform Eng | 2026-Q3 | open |
 | 5.2-F | Medium | Enforce OIDC `nonce` on implicit-flow login | IA-2(8) | Platform Eng | 2026-Q3 | open |
 | 5.2-H | Medium | Cosign all container images at build, verify at admission | SI-7(1)+(6) (High overlay) | Platform Ops | 2026-Q3 | partially closed — CI signs and attests images after Trivy gate; admission verification remains environment overlay |
 | 5.4-A | Medium | Switch chassis container base from `python:3.11-slim` to a FIPS-validated Python build | SC-13, IA-7 | Platform Eng | 2026-Q4 | open |
@@ -28,7 +27,6 @@ Severity scale:
 | 5.4-CVE-GNUTLS | Medium | 7 GnuTLS CVEs ignored in `.trivyignore`; gnutls is not linked by any chassis service | SC-13, SI-2 | Platform Eng | 2026-Q3 | open — quarterly review next 2026-08 |
 | 5.4-CVE-MISC | Low | 10 system-package CVEs (gnupg, libcap, sqlite, xz, pam, perl, setuptools, wheel) ignored in `.trivyignore`; build-time / out-of-call-graph for chassis runtime | SI-2 | Platform Eng | 2026-Q3 | open — quarterly review next 2026-08 |
 | 5.4-C | Low | Switch to chainguard/python distroless base to eliminate the inherited CVE allow-list entirely | SC-13, SA-22 | Platform Eng | 2026-Q4 | open — depends on FIPS validation status of chainguard's Python build |
-| 0.5-A | Low | Replace deprecated FastAPI `@on_event("startup")` with lifespan handlers | SI-2 (technical debt) | Platform Eng | 2026-Q3 | open — warning, not failure |
 | 1.7-A | Low | Add DynamoDB GSI on `organization_guid` for `list_instances` (current code scans + filters) | CM-8 performance | Platform Eng | 2026-Q4 | open — fine while inventory < 10k |
 
 ## Closed items
@@ -47,6 +45,8 @@ Severity scale:
 | 5.2-G | Sprint 5 branch | `policies/base/authentication.rego` requires `mfa` in OIDC `amr` for JWT state-changing actions. |
 | 5.2-D | Sprint 6 branch | Audit rows can be signed with an Ed25519 service-account key; production can require signing key material at startup. |
 | 5.2-C | Sprint 7 branch | `AUDIT_RETENTION_DAYS` drives ClickHouse TTL creation/migration and is exposed in the production manifest. |
+| 5.2-E | Sprint 8 branch | PR template requires security-reviewer pass, control-impact review, and security-relevant tests. |
+| 0.5-A | Sprint 8 branch | No `@app.on_event`/`on_event(` usage remains under `apps/` or `libs/`; services use lifespan handlers where startup work exists. |
 
 ## How an assessor uses this file
 
