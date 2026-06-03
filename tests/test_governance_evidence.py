@@ -73,3 +73,20 @@ def test_stig_hardening_reflects_closed_cosign_work() -> None:
 
     assert "Image signing and provenance verification" in stig
     assert "Sign every chassis image with cosign" not in open_items
+
+
+def test_ssp_avoids_stale_fixed_test_counts() -> None:
+    sa = (ROOT / "docs" / "ssp" / "controls" / "sa.md").read_text()
+
+    assert "218 Python tests" not in sa
+    assert "42 OPA tests" not in sa
+    assert "7 portal a11y tests" not in sa
+    assert "portal lint/type/test/build" in sa
+
+
+def test_sc13_discloses_runtime_fips_base_poam() -> None:
+    sc = (ROOT / "docs" / "ssp" / "controls" / "sc.md").read_text()
+
+    assert "implemented (policy), POA&M for runtime module" in sc
+    assert "POA&M 5.4-A" in sc
+    assert "FedRAMP-compliant via the OpenSSL FIPS module" not in sc
