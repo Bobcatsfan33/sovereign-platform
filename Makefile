@@ -60,7 +60,7 @@ test-cov:  ## run pytest with coverage, enforce 80% floor
 	$(VENV)/bin/pytest -q --cov --cov-report=term --cov-report=html --cov-fail-under=80
 
 lint:  ## ruff lint
-	$(VENV)/bin/ruff check libs apps tests
+	$(VENV)/bin/ruff check libs apps tests packs
 
 typecheck:  ## mypy on the shared lib surface
 	$(VENV)/bin/mypy libs/common/sovereign
@@ -73,7 +73,7 @@ security-scan:  ## dependency SCA + CycloneDX SBOM for the Python chassis
 check: lint typecheck test  ## lint + typecheck + tests — the local equivalent of CI
 
 fmt:  ## ruff lint with autofix (no formatter run; ruff format would re-flow code)
-	$(VENV)/bin/ruff check libs apps tests --fix
+	$(VENV)/bin/ruff check libs apps tests packs --fix
 
 # ── end-to-end smoke ─────────────────────────────────────────────────
 
