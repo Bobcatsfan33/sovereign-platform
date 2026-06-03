@@ -270,7 +270,7 @@ def test_tenant_metadata_lifts_into_policy_input(broker_phase3: Any) -> None:
                 },
             )
         )
-        token = mint_dev_token(sub="alice@gov")
+        token = mint_dev_token(sub="alice@gov", extra={"amr": ["pwd", "mfa"]})
         r = client.put(
             "/v2/service_instances/i-context",
             json=_provision_body(organization_guid="cade2"),
@@ -286,6 +286,9 @@ def test_tenant_metadata_lifts_into_policy_input(broker_phase3: Any) -> None:
     }
     # JWT user's groups are surfaced under context.caller_groups when set.
     assert policy_input["tenant_id"] == "cade2"
+    assert policy_input["context"]["auth_scheme"] == "oidc"
+    assert policy_input["context"]["require_mfa"] is True
+    assert policy_input["context"]["amr"] == ["pwd", "mfa"]
 
 
 # ── /v2/usage ─────────────────────────────────────────────────────────

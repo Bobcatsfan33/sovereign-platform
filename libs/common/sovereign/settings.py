@@ -115,6 +115,10 @@ class Settings:
     oidc_issuer_url: str = os.getenv("OIDC_ISSUER_URL", "")
     oidc_audience: str = os.getenv("OIDC_AUDIENCE", "")
     require_oidc: bool = _env_bool("REQUIRE_OIDC", default=_default_require_oidc(env))
+    oidc_jwks_cache_ttl_seconds: float = float(os.getenv("OIDC_JWKS_CACHE_TTL_SECONDS", "3600"))
+    oidc_jwks_stale_grace_seconds: float = float(
+        os.getenv("OIDC_JWKS_STALE_GRACE_SECONDS", "900")
+    )
 
     # Service identity — every service reports its own name to the audit
     # service so the trail says which component emitted the event.

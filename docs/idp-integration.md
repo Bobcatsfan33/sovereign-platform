@@ -113,6 +113,23 @@ the chassis API are expected to use OIDC client-credentials grants
 (Service Principals in Azure AD, Login.gov has a similar JWT-bearer
 grant for trusted SPs).
 
+JWKS caching honors the IdP's `Cache-Control: max-age` response when
+present. The fallback defaults are:
+
+```bash
+OIDC_JWKS_CACHE_TTL_SECONDS=3600
+OIDC_JWKS_STALE_GRACE_SECONDS=900
+```
+
+During a short IdP or network outage, the broker continues to verify
+tokens against stale cached keys inside the stale-grace window. After
+that window, verification fails closed.
+
+For state-changing API calls made with JWT/OIDC auth, the broker passes
+the token's `amr` claim to OPA. The base policy requires `mfa` in `amr`;
+tokens without MFA evidence are denied before provisioning, update,
+bind, or deprovision proceeds.
+
 ## Audit trail
 
 Every request logs `policy.evaluated` (Phase 2) and, when JWT-authed,

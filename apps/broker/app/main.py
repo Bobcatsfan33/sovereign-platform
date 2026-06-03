@@ -298,6 +298,19 @@ def _evaluate_policy(
     metadata), call OPA, ALWAYS emit a 'policy.evaluated' audit event,
     raise 403 on deny."""
     context_overrides = _tenant_policy_context(tenant_id)
+    amr = caller.user.raw.get("amr", [])
+    if isinstance(amr, str):
+        amr = [amr]
+    elif not isinstance(amr, list):
+        amr = []
+    context = {
+        "action": action,
+        "auth_scheme": "basic" if caller.is_basic else "oidc",
+        "caller_groups": list(caller.user.groups),
+        "amr": amr,
+        "acr": caller.user.raw.get("acr", ""),
+        "require_mfa": not caller.is_basic,
+    }
     policy_input = build_policy_input(
         actor=caller.user.principal,
         tenant_id=tenant_id,
@@ -307,7 +320,7 @@ def _evaluate_policy(
         approved_services=context_overrides.get("approved_services"),
         approved_plans=context_overrides.get("approved_plans"),
         approved_regions=context_overrides.get("approved_regions"),
-        context={"caller_groups": list(caller.user.groups)} if caller.user.groups else None,
+        context=context,
     )
     decision = policy.evaluate(policy_input)
 

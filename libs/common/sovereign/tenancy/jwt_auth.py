@@ -51,7 +51,13 @@ class TokenUser:
 def _oidc_verifier(issuer_url: str, audience: str):
     from ..idp.oidc import OidcVerifier
 
-    return OidcVerifier(issuer_url=issuer_url, audience=audience or None)
+    s = get_settings()
+    return OidcVerifier(
+        issuer_url=issuer_url,
+        audience=audience or None,
+        cache_ttl=s.oidc_jwks_cache_ttl_seconds,
+        stale_grace=s.oidc_jwks_stale_grace_seconds,
+    )
 
 
 def _decode(token: str) -> dict:
