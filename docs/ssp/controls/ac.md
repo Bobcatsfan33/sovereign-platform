@@ -36,4 +36,4 @@ The chassis enforces access control through three concentric layers:
 | Additional | Note |
 | --- | --- |
 | AC-2(11) Inactive Accounts | Requires the IdP to disable inactive accounts within an agency-defined window. Add to group-sync runbook. |
-| AC-2(12) Account Monitoring for Atypical Usage | Add ClickHouse alert on policy-deny spike per principal (POA&M 5.2-B). |
+| AC-2(12) Account Monitoring for Atypical Usage | The continuous monitor queries recent deny audit events and fails when one actor exceeds `POLICY_DENY_SPIKE_THRESHOLD` inside `POLICY_DENY_SPIKE_WINDOW_MINUTES`. |
