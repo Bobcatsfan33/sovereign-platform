@@ -1,5 +1,6 @@
 import { type FormEvent, useId, useState } from "react";
 
+import { beginOidcLogin, oidcAvailable } from "../auth/oidc";
 import { useAuth } from "../hooks/useAuth";
 
 const DEV_TOKEN = (import.meta.env.VITE_DEV_BEARER_TOKEN as string | undefined) ?? "dev-token";
@@ -13,6 +14,7 @@ export default function Login() {
   const bearerId = useId();
   const userId = useId();
   const passId = useId();
+  const hasOidc = oidcAvailable();
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
@@ -120,6 +122,16 @@ export default function Login() {
       >
         Use dev token (local docker-compose)
       </button>
+
+      {hasOidc ? (
+        <button
+          type="button"
+          onClick={() => beginOidcLogin()}
+          className="mt-3 w-full rounded border border-blue-700 px-4 py-2 text-sm font-medium text-blue-800 hover:bg-blue-50 focus:outline-2 focus:outline-amber-300"
+        >
+          Sign in with agency IdP
+        </button>
+      ) : null}
     </div>
   );
 }

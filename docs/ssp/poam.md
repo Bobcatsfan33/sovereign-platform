@@ -17,7 +17,6 @@ Severity scale:
 
 | ID | Severity | Title | Source | Owner | Target | Status |
 | --- | --- | --- | --- | --- | --- | --- |
-| 5.2-F | Medium | Enforce OIDC `nonce` on implicit-flow login | IA-2(8) | Platform Eng | 2026-Q3 | open |
 | 5.4-A | Medium | Switch chassis container base from `python:3.11-slim` to a FIPS-validated Python build | SC-13, IA-7 | Platform Eng | 2026-Q4 | open |
 | 5.4-B | Low | Pin `openpolicyagent/opa` image to a specific tag (currently `:latest-rootless`) | SA-22 | Platform Eng | 2026-Q3 | closed — pinned `openpolicyagent/opa:1.6.0-rootless` in commit `c403194` |
 | 5.4-CVE-OPENSSL | Medium | 7 OpenSSL CVEs (CVE-2025-15467, CVE-2025-69421, CVE-2026-28387 .. -28390, CVE-2026-31789) ignored in `.trivyignore` pending Debian point-release availability | SC-13, SI-2 | Platform Eng | 2026-Q3 | open — quarterly review next 2026-08 |
@@ -47,6 +46,7 @@ Severity scale:
 | 1.7-A | Sprint 9 branch | `sovereign_instances` now has an `organization_guid` GSI used by tenant-scoped `list_instances`. |
 | 5.2-A | Sprint 10 branch | NGINX front-door overlay applies RPS, burst, connection, TLS, and body-size controls to broker/audit routes. |
 | 5.2-H | Sprint 10 branch | Kyverno admission overlay verifies cosign keyless signatures, digests, and SLSA provenance for chassis images. |
+| 5.2-F | Sprint 11 branch | Portal OIDC callback validates stored `state`, token `nonce`, and `exp` before accepting the bearer token. |
 
 ## How an assessor uses this file
 

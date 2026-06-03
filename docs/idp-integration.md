@@ -130,6 +130,29 @@ the token's `amr` claim to OPA. The base policy requires `mfa` in `amr`;
 tokens without MFA evidence are denied before provisioning, update,
 bind, or deprovision proceeds.
 
+## Portal OIDC Callback
+
+The portal can initiate an OIDC implicit-flow sign-in when these build-time
+variables are present:
+
+```bash
+VITE_OIDC_ISSUER_URL=https://idp.example.gov
+VITE_OIDC_CLIENT_ID=sovereign-portal
+VITE_OIDC_AUDIENCE=sovereign-broker
+VITE_OIDC_REDIRECT_URI=https://portal.example.gov/oidc/callback
+```
+
+Before redirecting, the portal stores a random `state` and `nonce` in
+`sessionStorage`. The `/oidc/callback` route accepts the returned `id_token`
+only when:
+
+- `state` matches the stored login state,
+- the token payload `nonce` matches the stored nonce,
+- the token `exp` claim is not expired.
+
+The broker still performs authoritative JWT signature, issuer, audience, and
+MFA checks before accepting API calls.
+
 ## Audit trail
 
 Every request logs `policy.evaluated` (Phase 2) and, when JWT-authed,
