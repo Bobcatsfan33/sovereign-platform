@@ -117,17 +117,21 @@ curl -u broker:broker -X PUT http://localhost:8080/v2/service_instances/demo-lb 
 ## Development workflow
 
 ```bash
-make install      # create .venv (Python 3.11), install project + dev extras
-make test         # pytest -q
+make install      # create .venv (auto-detected Python 3.11–3.13), install project + dev extras
+make test         # pytest -q (chassis + all packs/*/tests)
 make test-cov     # pytest with coverage, fails under 80%
-make lint         # ruff check libs apps tests
+make lint         # ruff check libs apps tests packs
 make typecheck    # mypy libs/common/sovereign
 make check        # lint + typecheck + test — the local equivalent of CI
-make fmt          # ruff --fix
+make fmt          # ruff check --fix (libs apps tests packs)
 make smoke        # bring stack up, hit it with the demo provisioner, leave it running
 ```
 
-CI runs the same four steps in `.github/workflows/ci.yml` and additionally builds the four service Docker images on every PR, pushing them to GHCR on merge to `main`.
+`make check` mirrors CI. The `.github/workflows/ci.yml` pipeline additionally
+runs the OPA policy gate over the base **and every pack bundle**, tests across a
+Python 3.11/3.12/3.13 matrix, builds + lints the portal SPA, and builds the five
+service Docker images (broker, control-plane, audit-service, metering-service,
+portal) on every PR — Trivy-scanned, and pushed to GHCR on merge to `main`.
 
 ## Repository layout
 
