@@ -25,10 +25,21 @@ The manifest set includes:
 - resource requests and limits
 - default-deny network policy plus constrained internal/DNS/HTTPS egress
 - non-`:latest` images
+- optional NGINX ingress front-door rate limits
+- optional Kyverno admission policy for cosign signature/provenance verification
 
 Environment-specific overlays must replace placeholder OIDC values, workload
 identity allow-lists, IRSA role ARNs, image tags/digests, OPA policy ConfigMap
 content, audit retention (`AUDIT_RETENTION_DAYS`), and ingress/TLS resources.
+
+`deploy/k8s/frontdoor-rate-limit.yaml` is an NGINX ingress overlay that
+throttles broker and audit API traffic at the edge. Agencies using ALB,
+Envoy Gateway, or API Gateway should translate the same RPS, burst,
+connection, TLS, and body-size controls to their chosen front door.
+
+`deploy/k8s/admission-cosign-policy.yaml` is a Kyverno `ClusterPolicy`
+that enforces keyless cosign verification and SLSA provenance for
+Sovereign Platform images signed by the GitHub Actions workflow on `main`.
 
 ## Terraform
 

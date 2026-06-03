@@ -1,0 +1,44 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: verify-sovereign-platform-images
+  annotations:
+    policies.kyverno.io/title: Verify Sovereign Platform Images
+    policies.kyverno.io/category: Software Supply Chain Security
+    policies.kyverno.io/severity: high
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: verify-ghcr-signatures
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - sovereign-platform
+      verifyImages:
+        - imageReferences:
+            - ghcr.io/bobcatsfan33/sovereign-platform-broker:*
+            - ghcr.io/bobcatsfan33/sovereign-platform-control-plane:*
+            - ghcr.io/bobcatsfan33/sovereign-platform-audit-service:*
+            - ghcr.io/bobcatsfan33/sovereign-platform-metering-service:*
+            - ghcr.io/bobcatsfan33/sovereign-platform-portal:*
+          mutateDigest: true
+          required: true
+          verifyDigest: true
+          attestations:
+            - type: https://slsa.dev/provenance/v1
+              conditions:
+                - all:
+                    - key: "{{ builder.id }}"
+                      operator: Equals
+                      value: https://github.com/actions/runner
+          attestors:
+            - entries:
+                - keyless:
+                    issuer: https://token.actions.githubusercontent.com
+                    subject: repo:Bobcatsfan33/sovereign-platform:ref:refs/heads/main
+                    rekor:
+                      url: https://rekor.sigstore.dev
