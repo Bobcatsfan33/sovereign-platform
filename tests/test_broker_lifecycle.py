@@ -230,6 +230,58 @@ def test_healthz_open(broker_app: Any) -> None:
     assert r.json()["status"] == "ok"
 
 
+# ── Async provisioning (Step 0.1) ──────────────────────────────────────
+
+
+@mock_aws
+def test_async_provision_returns_202_and_completes(broker_app: Any) -> None:
+    """With ?accepts_incomplete=true the broker returns 202 immediately and
+    finalises render in a background task; the instance reaches 'succeeded'."""
+    with TestClient(broker_app.app) as client:
+        r = client.put(
+            "/v2/service_instances/i-async",
+            params={"accepts_incomplete": "true"},
+            json=_provision_body(),
+            auth=_broker_creds(),
+        )
+        assert r.status_code == 202, r.text
+        body = r.json()
+        assert body["operation"] == "provisioning"
+
+        # Starlette runs the BackgroundTask after the response is returned,
+        # so by now finalize has run: last_operation reports succeeded, and
+        # the OSB `operation` field is the spec vocabulary.
+        r = client.get("/v2/service_instances/i-async/last_operation", auth=_broker_creds())
+        assert r.json()["state"] == "succeeded"
+        assert r.json()["operation"] == "succeeded"
+
+    # Render did run (in the background) and the lifecycle audit landed.
+    assert "i-async" in broker_app._test_rendered
+    assert "instance.provisioned" in [a for a, _ in broker_app._test_emitted]
+
+
+@mock_aws
+def test_sync_provision_unaffected_by_async_flag_default(broker_app: Any) -> None:
+    """Default (no flag) stays synchronous: 201 with the rendered config."""
+    with TestClient(broker_app.app) as client:
+        r = client.put(
+            "/v2/service_instances/i-sync",
+            json=_provision_body(),
+            auth=_broker_creds(),
+        )
+        assert r.status_code == 201
+        assert r.json()["operation"] == "provisioned"
+        assert "config" in r.json()
+
+
+@mock_aws
+def test_last_operation_gone_has_operation_field(broker_app: Any) -> None:
+    with TestClient(broker_app.app) as client:
+        r = client.get("/v2/service_instances/never/last_operation", auth=_broker_creds())
+        assert r.json()["state"] == "gone"
+        assert r.json()["operation"] == "gone"
+
+
 # Suppress unused-import warning since BEARER is imported for parity with
 # other test modules even though basic auth is used here.
 _ = BEARER
