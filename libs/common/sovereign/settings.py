@@ -43,6 +43,14 @@ def _default_require_oidc(env: str) -> bool:
     return _is_production(env)
 
 
+def _default_require_managed_secrets(env: str) -> bool:
+    return _is_production(env)
+
+
+def _default_workload_identity_enabled(env: str) -> bool:
+    return _is_production(env)
+
+
 class Settings:
     # Environment marker — "dev" locally, "production" in real deployments.
     env: str = os.getenv("ENV", "dev")
@@ -125,6 +133,20 @@ class Settings:
     # the chassis (SOVEREIGN_SECRET_<NAME> vars); production registers a
     # Vault/Secrets-Manager provider via set_secrets_provider().
     secrets_provider: str = os.getenv("SECRETS_PROVIDER", "env")
+    secrets_prefix: str = os.getenv("SECRETS_PREFIX", "")
+    require_managed_secrets: bool = _env_bool(
+        "REQUIRE_MANAGED_SECRETS",
+        default=_default_require_managed_secrets(env),
+    )
+
+    # Workload identity headers are expected to be injected by a trusted
+    # mTLS front door/service mesh. They are a transition hook until the
+    # deployment layer wires native SPIFFE/SPIRE or mesh policy.
+    workload_identity_enabled: bool = _env_bool(
+        "WORKLOAD_IDENTITY_ENABLED",
+        default=_default_workload_identity_enabled(env),
+    )
+    allowed_workload_identities: str = os.getenv("ALLOWED_WORKLOAD_IDENTITIES", "")
 
     # CORS allow-list for browser-facing services (broker + audit). Comma-
     # separated origin URLs; empty allows the dev defaults below only.
@@ -156,5 +178,9 @@ def get_settings() -> Settings:
         if s.require_oidc and (not s.oidc_issuer_url or not s.oidc_audience):
             raise RuntimeError(
                 "refusing to start in production without OIDC_ISSUER_URL and OIDC_AUDIENCE"
+            )
+        if s.require_managed_secrets and (s.secrets_provider or "env").lower() == "env":
+            raise RuntimeError(
+                "refusing to start in production with env-only secrets provider"
             )
     return s

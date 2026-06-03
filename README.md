@@ -125,6 +125,18 @@ In production, `DEV_BEARER_TOKEN`, `BROKER_PASSWORD`, and `S3_SECRET_KEY` are pr
 
 Production JWT auth requires `OIDC_ISSUER_URL` and `OIDC_AUDIENCE`; when configured, the broker verifies Bearer JWTs against the issuer JWKS instead of the local HS256 development secret.
 
+Production secret material must come from a managed backend. Set
+`SECRETS_PROVIDER=aws-secrets-manager` or `SECRETS_PROVIDER=aws-ssm`
+with `SECRETS_PREFIX` for environment scoping; `ENV=production` refuses
+to start with the env-only provider unless `REQUIRE_MANAGED_SECRETS=false`
+is explicitly set for a temporary migration window.
+
+For service-to-service auth, production deployments should terminate mTLS
+at a trusted mesh/front door and pass an allow-listed `X-SPIFFE-ID` or
+`X-Sovereign-Workload-Identity` header to protected services. Set
+`WORKLOAD_IDENTITY_ENABLED=true` and comma-separate allowed identities in
+`ALLOWED_WORKLOAD_IDENTITIES`.
+
 ## Errors
 
 Every service emits RFC 7807-style JSON problem detail on error:

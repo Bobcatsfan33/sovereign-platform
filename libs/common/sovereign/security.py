@@ -16,12 +16,34 @@ from fastapi import Header, HTTPException, status
 from .settings import get_settings
 
 
-async def require_bearer(authorization: str | None = Header(default=None)) -> str:
+def _allowed_workload_identities(raw: str) -> set[str]:
+    return {item.strip() for item in raw.split(",") if item.strip()}
+
+
+def _workload_identity_allowed(identity: str, allowed: set[str]) -> bool:
+    return "*" in allowed or identity in allowed
+
+
+async def require_bearer(
+    authorization: str | None = Header(default=None),
+    workload_identity: str | None = Header(default=None, alias="X-Sovereign-Workload-Identity"),
+    spiffe_id: str | None = Header(default=None, alias="X-SPIFFE-ID"),
+) -> str:
     """FastAPI dependency. Returns the caller identity (currently a stub
     `"dev-user"` — replaced with a real subject claim once OIDC lands in
     Phase 3). Raises 401 if the token is missing, 403 if it mismatches."""
 
     s = get_settings()
+    asserted_identity = workload_identity or spiffe_id
+    if s.workload_identity_enabled and asserted_identity:
+        allowed = _allowed_workload_identities(s.allowed_workload_identities)
+        if _workload_identity_allowed(asserted_identity, allowed):
+            return asserted_identity
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="workload identity is not allowed",
+        )
+
     if not s.shared_bearer_auth_enabled:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

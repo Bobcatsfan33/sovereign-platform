@@ -52,6 +52,7 @@ def test_production_logs_warning_for_dev_defaults_when_strict_disabled(
     monkeypatch.setattr(settings_module.Settings, "env", "production")
     monkeypatch.setattr(settings_module.Settings, "strict_secrets", False)
     monkeypatch.setattr(settings_module.Settings, "require_oidc", False)
+    monkeypatch.setattr(settings_module.Settings, "require_managed_secrets", False)
     settings_module.get_settings.cache_clear()
 
     caplog.set_level(logging.ERROR)
@@ -95,12 +96,36 @@ def test_production_requires_oidc_when_enabled(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(settings_module.Settings, "env", "production")
     monkeypatch.setattr(settings_module.Settings, "strict_secrets", False)
     monkeypatch.setattr(settings_module.Settings, "require_oidc", True)
+    monkeypatch.setattr(settings_module.Settings, "require_managed_secrets", False)
     monkeypatch.setattr(settings_module.Settings, "oidc_issuer_url", "")
     monkeypatch.setattr(settings_module.Settings, "oidc_audience", "")
     settings_module.get_settings.cache_clear()
 
     with pytest.raises(RuntimeError, match="without OIDC_ISSUER_URL"):
         settings_module.get_settings()
+
+
+def test_production_requires_managed_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
+    from sovereign import settings as settings_module
+
+    monkeypatch.setattr(settings_module.Settings, "env", "production")
+    monkeypatch.setattr(settings_module.Settings, "strict_secrets", False)
+    monkeypatch.setattr(settings_module.Settings, "require_oidc", False)
+    monkeypatch.setattr(settings_module.Settings, "require_managed_secrets", True)
+    monkeypatch.setattr(settings_module.Settings, "secrets_provider", "env")
+    settings_module.get_settings.cache_clear()
+
+    with pytest.raises(RuntimeError, match="env-only secrets provider"):
+        settings_module.get_settings()
+
+
+def test_managed_secrets_and_workload_identity_defaults() -> None:
+    from sovereign import settings as settings_module
+
+    assert settings_module._default_require_managed_secrets("production") is True
+    assert settings_module._default_require_managed_secrets("dev") is False
+    assert settings_module._default_workload_identity_enabled("production") is True
+    assert settings_module._default_workload_identity_enabled("dev") is False
 
 
 def test_no_hardcoded_credentials_in_source() -> None:

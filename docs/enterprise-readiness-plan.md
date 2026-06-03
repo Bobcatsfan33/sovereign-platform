@@ -85,8 +85,9 @@ Objective: remove development trust paths from the production boundary.
 
 Exit criteria:
 
-- Service-to-service identity uses mTLS or platform workload identity.
-- Secrets resolve from a managed provider.
+- Services accept allow-listed workload identities asserted by a trusted mTLS
+  mesh/front door.
+- Secrets resolve from AWS Secrets Manager or AWS SSM Parameter Store.
 - KMS-backed encryption and rotation are documented and tested.
 
 ### Sprint 3: Production Platform
