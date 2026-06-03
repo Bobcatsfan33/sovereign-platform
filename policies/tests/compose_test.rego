@@ -117,3 +117,29 @@ test_tenant_layer_deny_bubbles_up if {
     "tenant-rule: blocked" in decision.denies
     "tenant:agency-x" in decision.matched_layers
 }
+
+# ── Obligation aggregation ────────────────────────────────────────────
+
+# A pack obligation surfaces in decision.obligations on an allowed request
+# without affecting allow (obligations are side-effects, not denials).
+test_pack_obligation_surfaces_on_allow if {
+    decision := sovereign.decision with input as compliant_lb_input
+        with data.sovereign.pack as {"ai": {"deny": set(), "obligations": {"pii-redaction"}}}
+    decision.allow == true
+    "pii-redaction" in decision.obligations
+}
+
+# Obligations from multiple layers (pack + tenant) are merged + sorted.
+test_obligations_merge_across_layers if {
+    decision := sovereign.decision with input as compliant_lb_input
+        with data.sovereign.pack as {"ai": {"deny": set(), "obligations": {"audit-model-provenance"}}}
+        with data.sovereign.tenant as {"agency-x": {"deny": set(), "obligations": {"tenant-extra"}}}
+    decision.allow == true
+    decision.obligations == ["audit-model-provenance", "tenant-extra"]
+}
+
+# A compliant request with no obligation-bearing layers has an empty list.
+test_no_obligations_when_none_emitted if {
+    decision := sovereign.decision with input as compliant_lb_input
+    decision.obligations == []
+}

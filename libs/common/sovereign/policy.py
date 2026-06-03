@@ -135,6 +135,7 @@ class PolicyClient:
         allow = bool(result.get("allow", False))
         denies = list(result.get("denies", []))
         matched_layers = list(result.get("matched_layers", []))
+        obligations = list(result.get("obligations", []))
         reason = "; ".join(denies) if denies else ""
 
         return PolicyDecision(
@@ -142,6 +143,7 @@ class PolicyClient:
             reason=reason,
             denies=denies,
             matched_layers=matched_layers,
+            obligations=obligations,
         )
 
     def _unavailable(self, detail: str) -> PolicyDecision:

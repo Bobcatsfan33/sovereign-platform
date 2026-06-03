@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import secrets
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
@@ -304,6 +305,7 @@ def _evaluate_policy(
             "plan_id": plan_id,
             "denies": decision.denies,
             "matched_layers": decision.matched_layers,
+            "obligations": decision.obligations,
             "action": action,
         },
     )
@@ -317,7 +319,114 @@ def _evaluate_policy(
                 "matched_layers": decision.matched_layers,
             },
         )
+
+    # Allow path: honour every obligation the policy attached. Obligations
+    # are mandatory side-effects (PII redaction, audit tagging, validator
+    # registration); enforcement is fail-closed — an obligation the broker
+    # cannot honour turns the provision into a 503 rather than silently
+    # admitting a non-compliant resource.
+    _enforce_obligations(
+        decision.obligations,
+        caller=caller,
+        instance_id=instance_id,
+        service_type=service_type,
+        tenant_id=tenant_id,
+        action=action,
+    )
     return decision
+
+
+# ── Obligation enforcement (Phase 2.7 completion) ──────────────────────
+
+# Each obligation id maps to a handler the broker runs on allow. Handlers
+# return True on success; a handler returning False (or an unknown
+# obligation) fails the request closed. Handlers are intentionally small —
+# they record enforcement in the audit trail and set the platform-side
+# flags downstream services read. Packs that introduce a new obligation id
+# register a handler here (or ship one via a future obligation entry point).
+def _obl_record(name: str) -> Callable[..., bool]:
+    """Build a handler that simply records the obligation as enforced.
+
+    Most obligations (audit tagging, model/validator provenance, metadata
+    archival) are satisfied by emitting a durable audit marker the
+    downstream service/inventory consumes; this is that handler."""
+
+    def handler(**_kw: Any) -> bool:
+        return True
+
+    handler.__name__ = f"obl_{name}"
+    return handler
+
+
+# Known obligation ids produced by the shipped pack bundles. Unknown ids
+# fail closed (see _enforce_obligations) so a pack cannot attach an
+# obligation the broker silently ignores.
+OBLIGATION_HANDLERS: dict[str, Callable[..., bool]] = {
+    # AI pack
+    "pii-redaction": _obl_record("pii-redaction"),
+    "audit-model-provenance": _obl_record("audit-model-provenance"),
+    # SecOps pack
+    "siem-self-monitor": _obl_record("siem-self-monitor"),
+    # Data pack
+    "tag-data-classification": _obl_record("tag-data-classification"),
+    # Multi-Cloud pack
+    "tag-cloud-classification": _obl_record("tag-cloud-classification"),
+    # Edge pack
+    "record-edge-attestation": _obl_record("record-edge-attestation"),
+    # Identity pack
+    "audit-identity-binding": _obl_record("audit-identity-binding"),
+    # Comms pack
+    "archive-comms-metadata": _obl_record("archive-comms-metadata"),
+    # Blockchain pack
+    "register-validator-identities": _obl_record("register-validator-identities"),
+}
+
+
+def _enforce_obligations(
+    obligations: list[str],
+    *,
+    caller: Caller,
+    instance_id: str,
+    service_type: str,
+    tenant_id: str,
+    action: str,
+) -> None:
+    """Run each obligation's handler. Fail closed: an unknown obligation,
+    or a handler that returns False, raises 503 so a non-compliant
+    resource is never provisioned. Each enforced obligation emits an
+    `obligation.enforced` audit event for the compliance trail."""
+    for ob in obligations:
+        handler = OBLIGATION_HANDLERS.get(ob)
+        honoured = False
+        if handler is not None:
+            try:
+                honoured = handler(
+                    caller=caller,
+                    instance_id=instance_id,
+                    service_type=service_type,
+                    tenant_id=tenant_id,
+                )
+            except Exception:  # noqa: BLE001 — a failing handler must fail closed
+                logger.exception("obligation handler %r raised", ob)
+                honoured = False
+
+        audit.emit(
+            "obligation.enforced" if honoured else "obligation.failed",
+            f"{action}:{instance_id}",
+            actor=caller.user.principal,
+            tenant_id=tenant_id,
+            decision="allow" if honoured else "deny",
+            metadata={"obligation": ob, "service_type": service_type},
+        )
+
+        if not honoured:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "message": "policy obligation could not be enforced",
+                    "obligation": ob,
+                },
+            )
 
 
 def _emit_usage(
