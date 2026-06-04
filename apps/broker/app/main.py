@@ -16,6 +16,8 @@ so tenant admins see headroom and budget systems see chargeback data.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import logging
 import secrets
@@ -86,7 +88,15 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     _startup()
-    yield
+    # ADR-0004: launch the periodic drift reconciler (no-op when the
+    # interval is 0). Cancelled on shutdown so the loop exits cleanly.
+    reconciler = asyncio.create_task(_periodic_reconciler())
+    try:
+        yield
+    finally:
+        reconciler.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await reconciler
 
 
 app = FastAPI(title="Sovereign Platform — OSB Broker", version="0.4.0", lifespan=lifespan)
@@ -710,6 +720,47 @@ async def render(instance: ServiceInstance) -> dict[str, Any]:
         ) from exc
 
 
+async def _diff(instance: ServiceInstance) -> dict[str, Any] | None:
+    """Ask the control-plane /diff whether `instance` has drifted (ADR-0004).
+
+    Returns the diff payload, or None when the control plane is unreachable
+    — detection is fail-safe, so an unreachable backend yields no drift
+    signal (the instance stays whatever it was) rather than a false
+    `drifted`."""
+    s = get_settings()
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.post(
+                f"{s.control_plane_url}/diff",
+                json=RenderRequest(instance=instance).model_dump(mode="json"),
+                headers={"Authorization": f"Bearer {s.dev_bearer_token}"},
+            )
+            r.raise_for_status()
+            return r.json()
+    except (httpx.HTTPError, httpx.HTTPStatusError) as exc:
+        logger.warning("control plane diff failed for %s: %s", instance.instance_id, exc)
+        return None
+
+
+async def _refresh_drift(inst: ServiceInstance) -> DriftStatus:
+    """Update `inst.drift_status` from a REAL backend comparison (ADR-0004).
+
+    Replaces the status-only heuristic as the source of truth for "has this
+    drifted." A confirmed difference → `drifted`; a confirmed match →
+    `in_sync`; an unreachable/uncheckable backend leaves the prior status
+    untouched (fail-safe). Does not itself reconcile — it only refreshes the
+    signal that `_needs_reconcile` consumes."""
+    result = await _diff(inst)
+    if result is None or result.get("unknown"):
+        # Could not confirm; leave the existing drift_status as-is.
+        return inst.drift_status
+    inst.drift_status = DriftStatus.drifted if result.get("drifted") else DriftStatus.in_sync
+    inst.last_reconciled_at = datetime.now(UTC).isoformat()
+    with contextlib.suppress(ClientError):
+        store.put_instance(inst)
+    return inst.drift_status
+
+
 async def _finalize_provision(
     inst: ServiceInstance,
     *,
@@ -867,7 +918,14 @@ def _system_reconciler() -> Caller:
     )
 
 
-async def _reconcile_instance(inst: ServiceInstance) -> dict[str, Any]:
+async def _reconcile_instance(
+    inst: ServiceInstance, *, refresh_drift: bool = False
+) -> dict[str, Any]:
+    # ADR-0004: when asked (the periodic loop does), refresh drift from a
+    # real backend diff BEFORE deciding whether to reconcile, so detection
+    # drives correction rather than status heuristics alone.
+    if refresh_drift and inst.status == InstanceStatus.succeeded:
+        await _refresh_drift(inst)
     if not _needs_reconcile(inst):
         return {
             "instance_id": inst.instance_id,
@@ -913,6 +971,54 @@ async def _reconcile_instance(inst: ServiceInstance) -> dict[str, Any]:
         "applied_version": inst.applied_version,
         "artifact": artifact,
     }
+
+
+async def _reconcile_pass(*, refresh_drift: bool) -> dict[str, int]:
+    """One sweep over all instances: optionally refresh drift via real diff,
+    then reconcile those that need it. Returns a small summary. Shared by the
+    periodic loop and the manual endpoint."""
+    s = get_settings()
+    try:
+        instances = store.list_instances(limit=s.reconcile_batch_limit)
+    except ClientError:
+        logger.exception("reconcile pass: failed to list instances")
+        return {"checked": 0, "changed": 0}
+    changed = 0
+    for inst in instances:
+        if inst is None:
+            continue
+        result = await _reconcile_instance(inst, refresh_drift=refresh_drift)
+        if result["action"] in {"reconciled", "failed"}:
+            changed += 1
+    return {"checked": len(instances), "changed": changed}
+
+
+async def _periodic_reconciler() -> None:
+    """Background loop (ADR-0004). Every `reconcile_interval_seconds` it
+    refreshes drift from real backend diffs and re-converges drifted
+    instances. Disabled when the interval is 0. Each pass is wrapped so a
+    transient error never kills the loop; cancellation (shutdown) exits
+    cleanly."""
+    interval = get_settings().reconcile_interval_seconds
+    if interval <= 0:
+        logger.info("periodic reconciler disabled (RECONCILE_INTERVAL_SECONDS=0)")
+        return
+    logger.info("periodic reconciler started; interval=%.0fs", interval)
+    while True:
+        try:
+            await asyncio.sleep(interval)
+            summary = await _reconcile_pass(refresh_drift=True)
+            if summary["changed"]:
+                logger.info(
+                    "periodic reconcile: checked=%d changed=%d",
+                    summary["checked"],
+                    summary["changed"],
+                )
+        except asyncio.CancelledError:
+            logger.info("periodic reconciler stopping")
+            raise
+        except Exception:  # noqa: BLE001 — never let one bad pass kill the loop
+            logger.exception("periodic reconcile pass failed; will retry next interval")
 
 
 @app.put("/v2/service_instances/{instance_id}", status_code=201)

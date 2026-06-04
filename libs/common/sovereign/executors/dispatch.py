@@ -11,10 +11,27 @@ from __future__ import annotations
 
 import logging
 
+from pydantic import BaseModel, Field
+
 from ..renderers.artifact import ApplyResult, DeploymentStep
 from .registry import registry as executor_registry
 
 logger = logging.getLogger("sovereign.executors.dispatch")
+
+
+class ManifestDiff(BaseModel):
+    """Aggregate drift result for a whole deployment manifest (ADR-0004).
+
+    `drifted` is True when at least one *successfully checked* step differs
+    from desired. `unknown` is True when at least one step could not be
+    checked (backend unreachable / missing CLI / no registered executor) —
+    detection is fail-safe, so an unchecked step never counts as drift.
+    `details` carries the per-step human-readable findings for the audit
+    trail."""
+
+    drifted: bool = False
+    unknown: bool = False
+    details: list[str] = Field(default_factory=list)
 
 
 async def apply_manifest(manifest: list[DeploymentStep]) -> ApplyResult:
@@ -44,3 +61,30 @@ async def apply_manifest(manifest: list[DeploymentStep]) -> ApplyResult:
             )
         applied.append(step)
     return ApplyResult(ok=True, applied_steps=applied)
+
+
+async def diff_manifest(manifest: list[DeploymentStep]) -> ManifestDiff:
+    """Walk every step's `diff()` and aggregate into a ManifestDiff (ADR-0004).
+
+    Mirrors apply_manifest but is read-only and never stops early — every
+    step is checked so the audit trail is complete. A step whose kind has no
+    registered executor is treated as unknown (fail-safe), not drift."""
+    drifted = False
+    unknown = False
+    details: list[str] = []
+    for step in manifest:
+        executor = executor_registry.get(step.kind)
+        if executor is None:
+            unknown = True
+            details.append(f"{step.kind}: no executor registered (unchecked)")
+            continue
+        d = await executor.diff(step)
+        if not d.checked:
+            unknown = True
+            details.append(f"{step.kind}: unchecked — {d.detail}")
+        elif d.drifted:
+            drifted = True
+            details.append(f"{step.kind}: DRIFTED — {d.detail}")
+        else:
+            details.append(f"{step.kind}: in sync")
+    return ManifestDiff(drifted=drifted, unknown=unknown, details=details)

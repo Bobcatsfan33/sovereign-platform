@@ -133,3 +133,156 @@ async def test_kubernetes_executor_requires_manifest_path(monkeypatch) -> None: 
     r = await KubernetesExecutor().execute(DeploymentStep(kind="k8s-apply", target="ns"))
     assert not r.ok
     assert "manifest_path" in r.detail
+
+
+# ── Drift detection: executor.diff() + diff_manifest (ADR-0004) ────────
+
+
+async def test_base_diff_default_reports_in_sync() -> None:
+    from sovereign.executors import NoopExecutor
+
+    d = await NoopExecutor().diff(DeploymentStep(kind="envoy-snapshot", target="i1"))
+    assert d.checked is True
+    assert d.drifted is False
+
+
+async def test_kubernetes_diff_in_sync(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr(shell_mod.shutil, "which", lambda _b: "/usr/bin/kubectl")
+    # kubectl diff exit 0 == no difference
+    monkeypatch.setattr(shell_mod, "_run", lambda cmd, *, timeout=120.0: (0, "", ""))
+    d = await KubernetesExecutor().diff(
+        DeploymentStep(kind="k8s-apply", target="prod", payload={"manifest_path": "/x.yaml"})
+    )
+    assert d.checked is True
+    assert d.drifted is False
+
+
+async def test_kubernetes_diff_detects_drift(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr(shell_mod.shutil, "which", lambda _b: "/usr/bin/kubectl")
+    # kubectl diff exit 1 == difference present
+    monkeypatch.setattr(shell_mod, "_run", lambda cmd, *, timeout=120.0: (1, "- old\n+ new", ""))
+    d = await KubernetesExecutor().diff(
+        DeploymentStep(kind="k8s-apply", target="prod", payload={"manifest_path": "/x.yaml"})
+    )
+    assert d.checked is True
+    assert d.drifted is True
+
+
+async def test_kubernetes_diff_error_is_unchecked(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr(shell_mod.shutil, "which", lambda _b: "/usr/bin/kubectl")
+    # exit >1 == error -> fail-safe unchecked (NOT drifted)
+    monkeypatch.setattr(shell_mod, "_run", lambda cmd, *, timeout=120.0: (3, "", "boom"))
+    d = await KubernetesExecutor().diff(
+        DeploymentStep(kind="k8s-apply", target="prod", payload={"manifest_path": "/x.yaml"})
+    )
+    assert d.checked is False
+    assert d.drifted is False
+
+
+async def test_kubernetes_diff_missing_cli_is_unchecked(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr(shell_mod.shutil, "which", lambda _b: None)
+    d = await KubernetesExecutor().diff(
+        DeploymentStep(kind="k8s-apply", target="prod", payload={"manifest_path": "/x.yaml"})
+    )
+    assert d.checked is False
+
+
+async def test_terraform_diff_detects_drift(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from sovereign.executors.shell import TerraformExecutor
+
+    monkeypatch.setattr(shell_mod.shutil, "which", lambda _b: "/usr/bin/terraform")
+    # init returns 0; plan -detailed-exitcode returns 2 (changes present)
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, *, timeout=120.0):  # type: ignore[no-untyped-def]
+        calls.append(cmd)
+        if "init" in cmd:
+            return 0, "", ""
+        return 2, "Plan: 1 to add", ""
+
+    monkeypatch.setattr(shell_mod, "_run", fake_run)
+    d = await TerraformExecutor().diff(
+        DeploymentStep(kind="terraform-apply", target="db", payload={"module_dir": "/m"})
+    )
+    assert d.checked is True
+    assert d.drifted is True
+    assert any("plan" in c for c in calls)
+
+
+async def test_terraform_diff_in_sync(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from sovereign.executors.shell import TerraformExecutor
+
+    monkeypatch.setattr(shell_mod.shutil, "which", lambda _b: "/usr/bin/terraform")
+    monkeypatch.setattr(shell_mod, "_run", lambda cmd, *, timeout=120.0: (0, "No changes", ""))
+    d = await TerraformExecutor().diff(
+        DeploymentStep(kind="terraform-apply", target="db", payload={"module_dir": "/m"})
+    )
+    assert d.checked is True
+    assert d.drifted is False
+
+
+async def test_diff_manifest_aggregates_drift() -> None:
+    from sovereign.executors import diff_manifest, register_executor
+    from sovereign.executors import registry as ex_registry
+    from sovereign.executors.base import BaseExecutor, DiffResult, ExecResult
+
+    ex_registry.clear()
+
+    class _InSync(BaseExecutor):
+        kind = "insync"
+
+        async def execute(self, step):  # type: ignore[no-untyped-def]
+            return ExecResult(ok=True)
+
+        async def diff(self, step):  # type: ignore[no-untyped-def]
+            return DiffResult(checked=True, drifted=False)
+
+    class _Drift(BaseExecutor):
+        kind = "drift"
+
+        async def execute(self, step):  # type: ignore[no-untyped-def]
+            return ExecResult(ok=True)
+
+        async def diff(self, step):  # type: ignore[no-untyped-def]
+            return DiffResult(checked=True, drifted=True, detail="changed")
+
+    register_executor(_InSync())
+    register_executor(_Drift())
+    md = await diff_manifest(
+        [DeploymentStep(kind="insync", target="a"), DeploymentStep(kind="drift", target="b")]
+    )
+    assert md.drifted is True
+    assert md.unknown is False
+    assert len(md.details) == 2
+
+
+async def test_diff_manifest_unknown_when_no_executor() -> None:
+    from sovereign.executors import diff_manifest
+    from sovereign.executors import registry as ex_registry
+
+    ex_registry.clear()
+    md = await diff_manifest([DeploymentStep(kind="no-such-kind", target="x")])
+    assert md.drifted is False  # fail-safe: unchecked is not drift
+    assert md.unknown is True
+
+
+async def test_diff_manifest_unchecked_does_not_count_as_drift() -> None:
+    from sovereign.executors import diff_manifest, register_executor
+    from sovereign.executors import registry as ex_registry
+    from sovereign.executors.base import BaseExecutor, DiffResult, ExecResult
+
+    ex_registry.clear()
+
+    class _Unreachable(BaseExecutor):
+        kind = "unreachable"
+
+        async def execute(self, step):  # type: ignore[no-untyped-def]
+            return ExecResult(ok=True)
+
+        async def diff(self, step):  # type: ignore[no-untyped-def]
+            return DiffResult(checked=False, detail="backend down")
+
+    register_executor(_Unreachable())
+    md = await diff_manifest([DeploymentStep(kind="unreachable", target="x")])
+    assert md.drifted is False
+    assert md.unknown is True

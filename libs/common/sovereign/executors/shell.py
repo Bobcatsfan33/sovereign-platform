@@ -22,7 +22,7 @@ from typing import ClassVar
 import httpx
 
 from ..renderers.artifact import DeploymentStep
-from .base import BaseExecutor, ExecResult
+from .base import BaseExecutor, DiffResult, ExecResult
 
 logger = logging.getLogger("sovereign.executors.shell")
 
@@ -74,6 +74,23 @@ class KubernetesExecutor(BaseExecutor):
             return ExecResult(ok=False, detail=f"kubectl apply failed: {errtxt.strip() or out.strip()}")
         return ExecResult(ok=True, detail=f"applied to namespace {ns}", outputs={"namespace": ns})
 
+    async def diff(self, step: DeploymentStep) -> DiffResult:
+        """`kubectl diff` exit codes: 0 = no diff, 1 = diff present, >1 =
+        error. Map 0→in-sync, 1→drifted, anything else (incl. missing CLI)
+        →unchecked (fail-safe)."""
+        if shutil.which("kubectl") is None:
+            return DiffResult(checked=False, detail="kubectl not found on PATH")
+        ns = step.target or "default"
+        path = step.payload.get("manifest_path")
+        if not path:
+            return DiffResult(checked=False, detail="k8s diff requires payload.manifest_path")
+        rc, _out, errtxt = _run(["kubectl", "diff", "-n", ns, "-f", path])
+        if rc == 0:
+            return DiffResult(checked=True, drifted=False, detail=f"{ns}: in sync")
+        if rc == 1:
+            return DiffResult(checked=True, drifted=True, detail=f"{ns}: drift detected")
+        return DiffResult(checked=False, detail=f"kubectl diff error: {errtxt.strip()}")
+
 
 class HelmExecutor(BaseExecutor):
     """`helm upgrade --install`. target is the release name; payload
@@ -121,6 +138,28 @@ class TerraformExecutor(BaseExecutor):
         if rc != 0:
             return ExecResult(ok=False, detail=f"terraform apply failed: {errtxt.strip() or out.strip()}")
         return ExecResult(ok=True, detail=f"applied module {module}", outputs={"module": module})
+
+    async def diff(self, step: DeploymentStep) -> DiffResult:
+        """`terraform plan -detailed-exitcode`: 0 = no changes, 2 = changes
+        present (drift), 1 = error. Map 0→in-sync, 2→drifted, else unchecked
+        (fail-safe). Runs `init` first so a fresh checkout can plan."""
+        if shutil.which("terraform") is None:
+            return DiffResult(checked=False, detail="terraform not found on PATH")
+        module = step.payload.get("module_dir")
+        if not module:
+            return DiffResult(checked=False, detail="terraform diff requires payload.module_dir")
+        rc, _out, errtxt = _run(["terraform", f"-chdir={module}", "init", "-input=false"], timeout=300.0)
+        if rc != 0:
+            return DiffResult(checked=False, detail=f"terraform init failed: {errtxt.strip()}")
+        rc, _out, errtxt = _run(
+            ["terraform", f"-chdir={module}", "plan", "-detailed-exitcode", "-input=false"],
+            timeout=600.0,
+        )
+        if rc == 0:
+            return DiffResult(checked=True, drifted=False, detail=f"{module}: in sync")
+        if rc == 2:
+            return DiffResult(checked=True, drifted=True, detail=f"{module}: drift detected")
+        return DiffResult(checked=False, detail=f"terraform plan error: {errtxt.strip()}")
 
 
 class WebhookExecutor(BaseExecutor):

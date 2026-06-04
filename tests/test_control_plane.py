@@ -105,3 +105,41 @@ def test_healthz_open(control_plane_app: Any) -> None:
         r = client.get("/healthz")
         assert r.status_code == 200
         assert "envoy-snapshot" in r.json()["executors"]
+
+
+# ── /diff drift-detection endpoint (ADR-0004) ──────────────────────────
+
+
+@mock_aws
+def test_diff_requires_bearer(control_plane_app: Any) -> None:
+    with TestClient(control_plane_app.app) as client:
+        r = client.post("/diff", json=_render_request())
+        assert r.status_code == 401
+
+
+@mock_aws
+def test_diff_returns_drift_shape(control_plane_app: Any) -> None:
+    with TestClient(control_plane_app.app) as client:
+        r = client.post("/diff", json=_render_request(), headers=AUTH_HEADER)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["instance_id"] == "demo-lb"
+        assert body["service_type"] == "sovereign-envoy-lb"
+        # The Envoy LB manifest is s3-put (no executor → unchecked) +
+        # envoy-snapshot (noop → in sync). Fail-safe: unknown, not drifted.
+        assert body["drifted"] is False
+        assert body["unknown"] is True
+        assert isinstance(body["details"], list) and body["details"]
+
+
+@mock_aws
+def test_diff_unknown_service_404(control_plane_app: Any) -> None:
+    inst = {
+        "instance_id": "nope",
+        "service_id": "does-not-exist",
+        "plan_id": "x",
+        "parameters": LbParameters().model_dump(mode="json"),
+    }
+    with TestClient(control_plane_app.app) as client:
+        r = client.post("/diff", json={"instance": inst}, headers=AUTH_HEADER)
+        assert r.status_code == 404
