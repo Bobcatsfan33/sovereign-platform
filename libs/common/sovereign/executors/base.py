@@ -23,6 +23,22 @@ class ExecResult(BaseModel):
     outputs: dict[str, str] = Field(default_factory=dict)
 
 
+class DiffResult(BaseModel):
+    """Outcome of a drift check for a single DeploymentStep (ADR-0004).
+
+    Detection is fail-safe: a step whose backend cannot be reached reports
+    `checked=False`, which the aggregator treats as `unknown` (NOT drifted),
+    so a transient backend blip never triggers a reconcile storm. A
+    `drifted=True` result only ever comes from a successful comparison that
+    found a difference."""
+
+    #: True when the backend was successfully queried for this step.
+    checked: bool = True
+    #: True when actual state differs from desired (only meaningful if checked).
+    drifted: bool = False
+    detail: str = ""
+
+
 class BaseExecutor(ABC):
     """Implement once per DeploymentStep `kind`. Subclasses set `kind`;
     the registry stores instances keyed by it. Executors must be
@@ -38,6 +54,16 @@ class BaseExecutor(ABC):
         ExecResult(ok=False, ...) so the dispatcher can record the failed
         step and stop cleanly."""
         raise NotImplementedError
+
+    async def diff(self, step: DeploymentStep) -> DiffResult:
+        """Report whether actual backend state matches desired for `step`
+        (ADR-0004). The default reports in-sync — appropriate for steps with
+        nothing to drift (noop/webhook) and a safe fallback for executors
+        that have not implemented a real comparison yet. Executors backed by
+        a stateful system (k8s, terraform) override this to query the
+        backend. Must not raise: return DiffResult(checked=False, ...) when
+        the backend cannot be reached."""
+        return DiffResult(checked=True, drifted=False, detail=f"{self.kind}: no drift surface")
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)

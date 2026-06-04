@@ -30,8 +30,8 @@ Public surface::
     )
 """
 
-from .base import BaseExecutor, ExecResult
-from .dispatch import apply_manifest
+from .base import BaseExecutor, DiffResult, ExecResult
+from .dispatch import ManifestDiff, apply_manifest, diff_manifest
 from .registry import get_executor, register_executor, registry
 from .shell import (
     HelmExecutor,
@@ -58,13 +58,16 @@ def register_default_executors() -> None:
 
 __all__ = [
     "BaseExecutor",
+    "DiffResult",
     "ExecResult",
     "HelmExecutor",
     "KubernetesExecutor",
+    "ManifestDiff",
     "NoopExecutor",
     "TerraformExecutor",
     "WebhookExecutor",
     "apply_manifest",
+    "diff_manifest",
     "get_executor",
     "register_default_executors",
     "register_executor",

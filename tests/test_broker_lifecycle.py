@@ -407,3 +407,86 @@ def test_reconcile_rejects_jwt_callers(broker_app: Any) -> None:
 # Suppress unused-import warning since BEARER is imported for parity with
 # other test modules even though basic auth is used here.
 _ = BEARER
+
+
+# ── Real drift detection + periodic reconcile (Epic 1 / ADR-0004) ──────
+
+
+async def test_refresh_drift_sets_drifted_from_real_diff(broker_app: Any, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """_refresh_drift flips drift_status to 'drifted' when the control-plane
+    /diff reports a confirmed difference."""
+    from sovereign.models import DriftStatus, InstanceStatus, LbParameters, ServiceInstance
+
+    with mock_aws():
+        broker_app.store.ensure_tables()
+        inst = ServiceInstance(
+            instance_id="d-1", service_id="sovereign-envoy-lb", plan_id="standard-regional",
+            parameters=LbParameters(), status=InstanceStatus.succeeded,
+            drift_status=DriftStatus.in_sync,
+        )
+        broker_app.store.put_instance(inst)
+        monkeypatch.setattr(broker_app, "_diff", lambda _i: _aw({"drifted": True, "unknown": False, "details": []}))
+        result = await broker_app._refresh_drift(inst)
+        assert result == DriftStatus.drifted
+        assert inst.drift_status == DriftStatus.drifted
+
+
+async def test_refresh_drift_in_sync_clears_status(broker_app: Any, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from sovereign.models import DriftStatus, InstanceStatus, LbParameters, ServiceInstance
+
+    with mock_aws():
+        broker_app.store.ensure_tables()
+        inst = ServiceInstance(
+            instance_id="d-2", service_id="sovereign-envoy-lb", plan_id="standard-regional",
+            parameters=LbParameters(), status=InstanceStatus.succeeded,
+            drift_status=DriftStatus.drifted,
+        )
+        broker_app.store.put_instance(inst)
+        monkeypatch.setattr(broker_app, "_diff", lambda _i: _aw({"drifted": False, "unknown": False, "details": []}))
+        result = await broker_app._refresh_drift(inst)
+        assert result == DriftStatus.in_sync
+
+
+async def test_refresh_drift_unknown_leaves_status_untouched(broker_app: Any, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Fail-safe: an unreachable/uncheckable backend must NOT force drift."""
+    from sovereign.models import DriftStatus, InstanceStatus, LbParameters, ServiceInstance
+
+    with mock_aws():
+        broker_app.store.ensure_tables()
+        inst = ServiceInstance(
+            instance_id="d-3", service_id="sovereign-envoy-lb", plan_id="standard-regional",
+            parameters=LbParameters(), status=InstanceStatus.succeeded,
+            drift_status=DriftStatus.in_sync,
+        )
+        broker_app.store.put_instance(inst)
+        monkeypatch.setattr(broker_app, "_diff", lambda _i: _aw(None))
+        assert await broker_app._refresh_drift(inst) == DriftStatus.in_sync
+        monkeypatch.setattr(broker_app, "_diff", lambda _i: _aw({"drifted": False, "unknown": True, "details": []}))
+        assert await broker_app._refresh_drift(inst) == DriftStatus.in_sync
+
+
+async def test_periodic_pass_reconciles_drifted_instance(broker_app: Any, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """End-to-end of the loop body: a succeeded+in_sync instance whose real
+    diff reports drift gets reconciled (re-applied) in one _reconcile_pass."""
+    from sovereign.models import DriftStatus, InstanceStatus, LbParameters, ServiceInstance
+
+    with mock_aws():
+        broker_app.store.ensure_tables()
+        inst = ServiceInstance(
+            instance_id="d-4", service_id="sovereign-envoy-lb", plan_id="standard-regional",
+            parameters=LbParameters(), status=InstanceStatus.succeeded,
+            drift_status=DriftStatus.in_sync, applied_version=1, version=1,
+        )
+        broker_app.store.put_instance(inst)
+        monkeypatch.setattr(broker_app, "_diff", lambda _i: _aw({"drifted": True, "unknown": False, "details": []}))
+        summary = await broker_app._reconcile_pass(refresh_drift=True)
+        assert summary["checked"] >= 1
+        assert summary["changed"] >= 1
+        assert "d-4" in broker_app._test_rendered
+
+
+def _aw(value):  # type: ignore[no-untyped-def]
+    """Tiny coroutine factory so monkeypatched async stubs can return a value."""
+    async def _coro(*_a, **_k):  # type: ignore[no-untyped-def]
+        return value
+    return _coro()

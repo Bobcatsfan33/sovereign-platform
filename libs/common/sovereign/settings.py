@@ -132,6 +132,15 @@ class Settings:
     rate_limit_rps: float = float(os.getenv("RATE_LIMIT_RPS", "50"))
     rate_limit_burst: float = float(os.getenv("RATE_LIMIT_BURST", "100"))
 
+    # Epic 1 / ADR-0004: periodic drift reconciler. The broker runs a
+    # background loop every `reconcile_interval_seconds` that refreshes drift
+    # (via the control-plane /diff) and re-converges drifted instances.
+    # Set the interval to 0 to disable the loop (it stays available via the
+    # manual POST /v2/reconcile). `reconcile_batch_limit` bounds how many
+    # instances one pass scans so the loop stays predictable.
+    reconcile_interval_seconds: float = float(os.getenv("RECONCILE_INTERVAL_SECONDS", "0"))
+    reconcile_batch_limit: int = int(os.getenv("RECONCILE_BATCH_LIMIT", "200"))
+
     # S5: durable audit disk spool. Empty path disables it (in-memory
     # ring buffer only). Set to a writable path in production so audit
     # events survive a ClickHouse outage that outlasts the buffer.

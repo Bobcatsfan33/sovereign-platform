@@ -172,6 +172,53 @@ async def render(req: RenderRequest) -> dict[str, Any]:
     }
 
 
+@app.post("/diff", dependencies=[Depends(require_bearer)])
+async def diff(req: RenderRequest) -> dict[str, Any]:
+    """Read-only drift check (ADR-0004). Renders the desired artifact for
+    the instance and compares it against live backend state via the
+    renderer's diff() (which walks the deployment manifest through the
+    executor registry). Never mutates anything. Returns whether the
+    instance has drifted; `unknown` means at least one step's backend could
+    not be checked, so the caller should NOT treat it as drift (fail-safe)."""
+    instance = req.instance
+    try:
+        renderer = registry.require(instance.service_id)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"no renderer for service_type {instance.service_id!r}",
+        ) from exc
+
+    try:
+        artifact = await renderer.render(instance)
+    except RenderValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
+    md = await renderer.diff(artifact)
+    audit.emit(
+        "config.diffed",
+        instance.instance_id,
+        details=("drifted" if md.drifted else "unknown" if md.unknown else "in_sync"),
+        metadata={
+            "service_type": artifact.service_type,
+            "version": artifact.version,
+            "drifted": md.drifted,
+            "unknown": md.unknown,
+        },
+    )
+    return {
+        "instance_id": instance.instance_id,
+        "service_type": artifact.service_type,
+        "version": artifact.version,
+        "drifted": md.drifted,
+        "unknown": md.unknown,
+        "details": md.details,
+    }
+
+
 @app.get("/instances/{instance_id}/versions/{version}/envoy.yaml")
 def get_config(instance_id: str, version: int) -> Response:
     """Return the rendered Envoy YAML for the given instance + version.

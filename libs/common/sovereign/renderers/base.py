@@ -25,6 +25,7 @@ from .artifact import (
 
 if TYPE_CHECKING:
     from ..catalog import ServiceCatalogEntry
+    from ..executors import ManifestDiff
 
 
 class BaseRenderer(ABC):
@@ -57,6 +58,20 @@ class BaseRenderer(ABC):
         calls with the same artifact should converge to the same end
         state, not duplicate side effects."""
         raise NotImplementedError
+
+    async def diff(self, artifact: RenderedArtifact) -> ManifestDiff:
+        """Report whether the live resources for `artifact` match desired
+        (ADR-0004). The default diffs the artifact's deployment_manifest
+        through the executor registry — the read-only sibling of the
+        manifest-based apply() that every pack renderer already uses. A
+        renderer with a bespoke (non-manifest) apply path overrides this to
+        match. Read-only and fail-safe: never mutates the backend, and
+        reports `unknown` rather than `drifted` when a backend can't be
+        reached."""
+        # Local import avoids a base-renderer → executors cycle at load.
+        from ..executors import diff_manifest
+
+        return await diff_manifest(artifact.deployment_manifest)
 
     @abstractmethod
     async def teardown(self, instance: ServiceInstance) -> TeardownResult:
