@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sovereign-platform"
-version = "0.1.0"
+version = "0.5.0a0"
 description = "Compliance-native self-service infrastructure platform for regulated and government environments. Base chassis plus modular service packs."
 requires-python = ">=3.11"
 dependencies = [
