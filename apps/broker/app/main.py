@@ -64,6 +64,7 @@ from sovereign.ratelimit import install_rate_limit
 from sovereign.renderers import register_renderer
 from sovereign.renderers import registry as renderer_registry
 from sovereign.renderers.envoy import EnvoyRenderer  # noqa: F401  (side-effect import)
+from sovereign.security import service_auth_headers
 from sovereign.settings import get_settings
 from sovereign.store import Store
 from sovereign.tenancy import (
@@ -708,7 +709,7 @@ async def render(instance: ServiceInstance) -> dict[str, Any]:
             r = await client.post(
                 f"{s.control_plane_url}/render",
                 json=RenderRequest(instance=instance).model_dump(mode="json"),
-                headers={"Authorization": f"Bearer {s.dev_bearer_token}"},
+                headers=service_auth_headers(),
             )
             r.raise_for_status()
             return r.json()
@@ -733,7 +734,7 @@ async def _diff(instance: ServiceInstance) -> dict[str, Any] | None:
             r = await client.post(
                 f"{s.control_plane_url}/diff",
                 json=RenderRequest(instance=instance).model_dump(mode="json"),
-                headers={"Authorization": f"Bearer {s.dev_bearer_token}"},
+                headers=service_auth_headers(),
             )
             r.raise_for_status()
             return r.json()

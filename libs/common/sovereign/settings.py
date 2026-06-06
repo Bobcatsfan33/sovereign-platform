@@ -178,6 +178,18 @@ class Settings:
         default=_default_workload_identity_enabled(env),
     )
     allowed_workload_identities: str = os.getenv("ALLOWED_WORKLOAD_IDENTITIES", "")
+    # E2: the identity THIS service asserts on outbound service-to-service
+    # calls (the inbound side verifies it against allowed_workload_identities).
+    # Empty falls back to a SPIFFE-style id derived from service_name, so a
+    # mesh/front-door that injects real SVIDs can override it while the
+    # chassis still asserts *something* when workload identity is enabled.
+    workload_identity: str = os.getenv("WORKLOAD_IDENTITY", "")
+
+    def asserted_workload_identity(self) -> str:
+        """The workload identity this service presents outbound. Explicit
+        WORKLOAD_IDENTITY wins; otherwise derive a stable SPIFFE-style id
+        from the service name."""
+        return self.workload_identity or f"spiffe://sovereign/{self.service_name}"
 
     # CORS allow-list for browser-facing services (broker + audit). Comma-
     # separated origin URLs; empty allows the dev defaults below only.

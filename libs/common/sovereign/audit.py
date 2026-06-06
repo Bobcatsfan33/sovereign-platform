@@ -20,6 +20,7 @@ from typing import Any
 import httpx
 
 from .models import AuditEvent
+from .security import service_auth_headers
 from .settings import get_settings
 
 logger = logging.getLogger("sovereign.audit")
@@ -35,7 +36,6 @@ class Audit:
     def __init__(self, service: str | None = None, timeout: float = 2.0) -> None:
         s = get_settings()
         self._base_url = s.audit_service_url.rstrip("/")
-        self._token = s.dev_bearer_token
         self._service = service or s.service_name
         self._client = httpx.Client(timeout=timeout)
 
@@ -69,7 +69,7 @@ class Audit:
             response = self._client.post(
                 f"{self._base_url}/events",
                 json=event.model_dump(mode="json"),
-                headers={"Authorization": f"Bearer {self._token}"},
+                headers=service_auth_headers(),
             )
             if response.status_code >= 400:
                 logger.warning(
