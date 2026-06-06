@@ -27,32 +27,53 @@ def _is_production(env: str) -> bool:
     return env.lower() in {"production", "prod"}
 
 
+# Environments where the baked-in dev defaults (well-known credentials,
+# permissive auth) are acceptable. ANY other value — "staging", "demo",
+# "gov-prod", or a typo — is treated as a managed environment that must
+# supply real secrets and fails closed otherwise. Secure-by-default: you
+# opt INTO dev convenience, you never fall INTO it by mislabelling an env.
+_DEV_ENVIRONMENTS: frozenset[str] = frozenset(
+    {"dev", "development", "local", "test", "testing", "ci"}
+)
+
+
+def _is_development(env: str) -> bool:
+    return env.lower() in _DEV_ENVIRONMENTS
+
+
+def _requires_real_secrets(env: str) -> bool:
+    """True for every environment that is not an explicitly-declared
+    development one. This is the single trigger for all fail-closed
+    guardrails — production AND any unrecognised (e.g. staging) env."""
+    return not _is_development(env)
+
+
 def _default_broker_trust_basic_auth(env: str) -> bool:
-    return not _is_production(env)
+    return not _requires_real_secrets(env)
 
 
 def _default_strict_secrets(env: str) -> bool:
-    return _is_production(env)
+    return _requires_real_secrets(env)
 
 
 def _default_shared_bearer_auth_enabled(env: str) -> bool:
-    return not _is_production(env)
+    return not _requires_real_secrets(env)
 
 
 def _default_require_oidc(env: str) -> bool:
-    return _is_production(env)
+    return _requires_real_secrets(env)
 
 
 def _default_require_managed_secrets(env: str) -> bool:
-    return _is_production(env)
+    return _requires_real_secrets(env)
 
 
 def _default_workload_identity_enabled(env: str) -> bool:
-    return _is_production(env)
+    return _requires_real_secrets(env)
 
 
 def _default_require_audit_signing(env: str) -> bool:
-    return _is_production(env)
+    return _requires_real_secrets(env)
 
 
 class Settings:
@@ -203,7 +224,7 @@ class Settings:
 @lru_cache
 def get_settings() -> Settings:
     s = Settings()
-    if _is_production(s.env):
+    if _requires_real_secrets(s.env):
         live = [k for k, v in _DEV_SENTINELS.items() if getattr(s, k, None) == v]
         if live:
             logger.error(
@@ -215,21 +236,24 @@ def get_settings() -> Settings:
             )
             if s.strict_secrets:
                 raise RuntimeError(
-                    "refusing to start in production with dev sentinels active: "
-                    + ", ".join(live)
+                    f"refusing to start in a managed environment (ENV={s.env}) "
+                    "with dev sentinels active: " + ", ".join(live)
                 )
         if s.require_oidc and (not s.oidc_issuer_url or not s.oidc_audience):
             raise RuntimeError(
-                "refusing to start in production without OIDC_ISSUER_URL and OIDC_AUDIENCE"
+                f"refusing to start in a managed environment (ENV={s.env}) "
+                "without OIDC_ISSUER_URL and OIDC_AUDIENCE"
             )
         if s.require_managed_secrets and (s.secrets_provider or "env").lower() == "env":
             raise RuntimeError(
-                "refusing to start in production with env-only secrets provider"
+                f"refusing to start in a managed environment (ENV={s.env}) "
+                "with env-only secrets provider"
             )
         if s.require_audit_signing and (
             not s.audit_signature_key_id or not s.audit_signing_private_key_pem
         ):
             raise RuntimeError(
-                "refusing to start in production without audit signing key material"
+                f"refusing to start in a managed environment (ENV={s.env}) "
+                "without audit signing key material"
             )
     return s
