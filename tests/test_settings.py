@@ -34,7 +34,7 @@ def test_production_fails_closed_for_dev_defaults(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(settings_module.Settings, "strict_secrets", True)
     settings_module.get_settings.cache_clear()
 
-    with pytest.raises(RuntimeError, match="refusing to start in production"):
+    with pytest.raises(RuntimeError, match="refusing to start in a managed environment"):
         settings_module.get_settings()
 
 
@@ -146,6 +146,48 @@ def test_production_requires_audit_signing_when_enabled(
     settings_module.get_settings.cache_clear()
 
     with pytest.raises(RuntimeError, match="audit signing key material"):
+        settings_module.get_settings()
+
+
+def test_unknown_env_is_treated_as_managed_not_dev() -> None:
+    """Secure-by-default: only an explicit dev allowlist relaxes the
+    guardrails. 'staging', 'demo', or a typo must be locked down."""
+    from sovereign import settings as settings_module
+
+    assert settings_module._is_development("dev") is True
+    assert settings_module._is_development("Development") is True
+    assert settings_module._is_development("ci") is True
+    # Anything not on the allowlist requires real secrets.
+    for env in ("staging", "demo", "gov-prod", "production", "prod", ""):
+        assert settings_module._requires_real_secrets(env) is True, env
+
+
+def test_guardrail_defaults_lock_down_unrecognised_env() -> None:
+    """A non-dev, non-'production' env still gets every guardrail on."""
+    from sovereign import settings as settings_module
+
+    assert settings_module._default_strict_secrets("staging") is True
+    assert settings_module._default_require_oidc("staging") is True
+    assert settings_module._default_require_managed_secrets("staging") is True
+    assert settings_module._default_workload_identity_enabled("staging") is True
+    assert settings_module._default_require_audit_signing("staging") is True
+    # ...and the permissive paths default OFF.
+    assert settings_module._default_shared_bearer_auth_enabled("staging") is False
+    assert settings_module._default_broker_trust_basic_auth("staging") is False
+
+
+def test_staging_fails_closed_for_dev_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The footgun this slice closes: a mislabelled (non-'production') env
+    must NOT silently run on the baked-in dev credentials."""
+    from sovereign import settings as settings_module
+
+    monkeypatch.setattr(settings_module.Settings, "env", "staging")
+    monkeypatch.setattr(settings_module.Settings, "dev_bearer_token", "dev-token")
+    monkeypatch.setattr(settings_module.Settings, "s3_secret_key", "minioadmin")
+    monkeypatch.setattr(settings_module.Settings, "strict_secrets", True)
+    settings_module.get_settings.cache_clear()
+
+    with pytest.raises(RuntimeError, match="ENV=staging"):
         settings_module.get_settings()
 
 

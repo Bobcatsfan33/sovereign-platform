@@ -358,16 +358,17 @@ def check_image_scan_freshness(max_age_hours: int = 24) -> CheckResult:
 
 
 def check_settings_sentinels() -> CheckResult:
-    """When ENV=production, no dev sentinels remain active."""
+    """In any managed (non-development) environment, no dev sentinels
+    remain active. Mirrors the secure-by-default startup gate."""
     sys.path.insert(0, str(ROOT / "libs" / "common"))
-    from sovereign.settings import _DEV_SENTINELS, get_settings
+    from sovereign.settings import _DEV_SENTINELS, _requires_real_secrets, get_settings
 
     s = get_settings()
-    if s.env.lower() not in {"production", "prod"}:
+    if not _requires_real_secrets(s.env):
         return CheckResult(
             "settings_sentinels",
             "SKIP",
-            f"ENV={s.env}; sentinel gate is production-only",
+            f"ENV={s.env}; sentinel gate applies to managed environments only",
             ("CM-6", "IA-5"),
         )
     active = [k for k, v in _DEV_SENTINELS.items() if getattr(s, k, None) == v]
@@ -375,7 +376,7 @@ def check_settings_sentinels() -> CheckResult:
         return CheckResult(
             "settings_sentinels",
             "FAIL",
-            f"dev sentinels still active in production: {', '.join(active)}",
+            f"dev sentinels still active in managed environment {s.env}: {', '.join(active)}",
             ("CM-6", "IA-5"),
         )
     return CheckResult(

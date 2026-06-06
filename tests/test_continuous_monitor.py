@@ -211,6 +211,20 @@ def test_settings_sentinels_skip_outside_prod() -> None:
     assert result.status == "SKIP"
 
 
+def test_settings_sentinels_gates_unrecognised_env() -> None:
+    """A mislabelled (non-dev, non-'production') env is gated, not skipped."""
+    monitor = load_monitor()
+    from sovereign.settings import Settings, get_settings
+
+    get_settings.cache_clear()
+    with patch.object(Settings, "env", "staging"), patch.object(
+        Settings, "dev_bearer_token", "dev-token"
+    ):
+        result = monitor.check_settings_sentinels()
+    assert result.status == "FAIL"
+    assert "staging" in result.detail
+
+
 def test_settings_sentinels_fail_when_dev_token_active_in_prod() -> None:
     monitor = load_monitor()
     from sovereign.settings import Settings, get_settings
