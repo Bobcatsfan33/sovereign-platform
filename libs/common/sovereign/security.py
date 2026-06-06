@@ -24,6 +24,37 @@ def _workload_identity_allowed(identity: str, allowed: set[str]) -> bool:
     return "*" in allowed or identity in allowed
 
 
+#: Header the chassis uses to assert/verify a workload identity (mirrors the
+#: inbound `require_bearer` alias). A real mesh/front-door may instead inject
+#: `X-SPIFFE-ID`; the inbound side accepts either.
+WORKLOAD_IDENTITY_HEADER = "X-Sovereign-Workload-Identity"
+
+
+def service_auth_headers() -> dict[str, str]:
+    """Build outbound auth headers for a service-to-service call (E2).
+
+    Symmetric with the inbound `require_bearer` policy so the platform can
+    talk to itself under every auth posture:
+
+    - When workload identity is enabled, assert this service's identity in
+      the workload-identity header (what the inbound side verifies first).
+    - When the shared bearer is still enabled (dev/transition posture), also
+      include the Bearer token so a peer that has not enabled workload
+      identity yet keeps accepting the call.
+
+    In the locked-down production posture (workload identity on, shared bearer
+    off) this yields an identity header and no token — exactly what the
+    hardened inbound path requires, and the reason the platform previously
+    could not call itself in production."""
+    s = get_settings()
+    headers: dict[str, str] = {}
+    if s.workload_identity_enabled:
+        headers[WORKLOAD_IDENTITY_HEADER] = s.asserted_workload_identity()
+    if s.shared_bearer_auth_enabled:
+        headers["Authorization"] = f"Bearer {s.dev_bearer_token}"
+    return headers
+
+
 async def require_bearer(
     authorization: str | None = Header(default=None),
     workload_identity: str | None = Header(default=None, alias="X-Sovereign-Workload-Identity"),

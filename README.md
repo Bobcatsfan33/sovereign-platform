@@ -168,8 +168,8 @@ In production, Envoy hosts boot from Packer-built AMIs configured by SaltStack, 
 | Surface | Scheme | Why |
 | --- | --- | --- |
 | Broker `/v2/*` | HTTP Basic + Bearer JWT | OSB v2 compatibility plus tenant-aware authorization. |
-| Broker outbound to control-plane / audit | Bearer locally; workload identity target | `DEV_BEARER_TOKEN` is a development compatibility path. Production should disable shared bearer with `SHARED_BEARER_AUTH_ENABLED=false` and use the Sprint 2 workload-identity path. |
-| Control plane, audit, metering | Bearer locally; workload identity target | `sovereign.security.require_bearer` rejects traffic when shared bearer auth is disabled. |
+| Service-to-service (broker→control-plane render/diff, audit & metering clients) | Workload identity and/or shared Bearer | `sovereign.security.service_auth_headers()` builds outbound auth symmetrically with the inbound check: it asserts this service's `WORKLOAD_IDENTITY` (default `spiffe://sovereign/<service>`) when workload identity is enabled, and includes `DEV_BEARER_TOKEN` only while `SHARED_BEARER_AUTH_ENABLED=true`. In the locked-down posture (workload identity on, shared bearer off) calls carry an identity header and **no shared token**. |
+| Control plane, audit, metering (inbound) | Workload identity and/or shared Bearer | `sovereign.security.require_bearer` verifies the asserted workload identity against `ALLOWED_WORKLOAD_IDENTITIES`, and rejects traffic with 503 when shared bearer auth is disabled and no allowed identity is presented. |
 | `/healthz` on every service | none | Allow compose / K8s liveness probes. |
 
 In production, `DEV_BEARER_TOKEN`, `BROKER_PASSWORD`, and `S3_SECRET_KEY` are provisioned by the secret manager. Settings fail closed at startup if `ENV=production` and any sentinel default is still in place, unless an operator explicitly sets `STRICT_SECRETS=false` for a temporary break-glass migration window. `BROKER_TRUST_BASIC_AUTH` also defaults to false in production so OSB Basic callers do not skip RBAC by accident.

@@ -57,6 +57,11 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
+      # pip-audit scans the whole environment, including pip itself. The
+      # runner's bundled pip lags behind disclosed CVEs (e.g. PYSEC-2026-196
+      # in pip 26.1.1), which fails the gate on an issue unrelated to the
+      # project's own dependencies. Upgrade pip to the patched line first.
+      - run: python -m pip install --upgrade "pip>=26.1.2"
       - run: pip install -e ".[dev]"
       - name: pip-audit
         run: python -m pip install -U pip setuptools wheel && pip-audit --skip-editable --progress-spinner off
