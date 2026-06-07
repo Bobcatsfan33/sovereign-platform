@@ -13,6 +13,7 @@ import secrets
 
 from fastapi import Header, HTTPException, status
 
+from .mtls import XFCC_HEADER, parse_xfcc_identity
 from .settings import get_settings
 
 
@@ -59,12 +60,34 @@ async def require_bearer(
     authorization: str | None = Header(default=None),
     workload_identity: str | None = Header(default=None, alias="X-Sovereign-Workload-Identity"),
     spiffe_id: str | None = Header(default=None, alias="X-SPIFFE-ID"),
+    forwarded_client_cert: str | None = Header(default=None, alias=XFCC_HEADER),
 ) -> str:
     """FastAPI dependency. Returns the caller identity (currently a stub
     `"dev-user"` — replaced with a real subject claim once OIDC lands in
     Phase 3). Raises 401 if the token is missing, 403 if it mismatches."""
 
     s = get_settings()
+
+    # E2 mesh mTLS (hardened posture). The only trusted identity is the one
+    # the mesh verified via mTLS and forwarded as XFCC; Envoy sanitises any
+    # client-supplied copy, so this cannot be spoofed on a direct path. Plain
+    # X-Sovereign-Workload-Identity / X-SPIFFE-ID headers are deliberately
+    # ignored here because a caller can set them freely.
+    if s.mtls_required:
+        verified_identity = parse_xfcc_identity(forwarded_client_cert)
+        if not verified_identity:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="mTLS client certificate required",
+            )
+        allowed = _allowed_workload_identities(s.allowed_workload_identities)
+        if _workload_identity_allowed(verified_identity, allowed):
+            return verified_identity
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="workload identity is not allowed",
+        )
+
     asserted_identity = workload_identity or spiffe_id
     if s.workload_identity_enabled and asserted_identity:
         allowed = _allowed_workload_identities(s.allowed_workload_identities)
