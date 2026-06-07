@@ -25,9 +25,13 @@ import os
 import threading
 from abc import ABC, abstractmethod
 from base64 import b64decode
+from typing import TYPE_CHECKING
 
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
+
+if TYPE_CHECKING:
+    from .settings import Settings
 
 
 class SecretNotFoundError(KeyError):
@@ -157,36 +161,59 @@ def set_secrets_provider(provider: SecretsProvider) -> None:
         _provider = provider
 
 
-def get_secrets_provider() -> SecretsProvider:
-    """Return the active provider, constructing the default on first use.
+def _build_provider(s: Settings) -> SecretsProvider:
+    """Construct a provider from a settings instance WITHOUT importing
+    settings. Kept separate so `get_settings()` can resolve managed secrets
+    by passing its own (not-yet-cached) instance, avoiding a get_settings →
+    get_secrets_provider → get_settings recursion.
 
     Selection is by the SECRETS_PROVIDER setting. Unknown values fail closed
     so a production typo cannot silently fall back to env-only secrets."""
+    kind = (s.secrets_provider or "env").lower()
+    if kind in {"env", ""}:
+        return EnvSecretsProvider()
+    if kind in {"aws-secrets-manager", "secretsmanager", "asm"}:
+        return AwsSecretsManagerProvider(
+            region_name=s.aws_region,
+            prefix=s.secrets_prefix,
+        )
+    if kind in {"aws-ssm", "ssm", "parameter-store"}:
+        return AwsSsmParameterProvider(
+            region_name=s.aws_region,
+            prefix=s.secrets_prefix,
+        )
+    raise RuntimeError(f"unknown secrets provider {kind!r}")
+
+
+def provider_for_settings(s: Settings) -> SecretsProvider:
+    """Return the installed process-wide provider if one was set (e.g. a
+    test mock or an explicit production registration), otherwise build one
+    from `s`. Does NOT import settings, so it is safe to call from inside
+    `get_settings()`."""
+    with _lock:
+        if _provider is not None:
+            return _provider
+        return _build_provider(s)
+
+
+def get_secrets_provider() -> SecretsProvider:
+    """Return the active provider, constructing the default on first use."""
     global _provider
     with _lock:
         if _provider is not None:
             return _provider
-        # Imported lazily to avoid a settings import at module load.
-        from .settings import get_settings
+    # Resolve settings OUTSIDE the lock. get_settings() may itself build a
+    # transient provider to resolve managed secrets, and that path takes
+    # _lock via provider_for_settings(); holding it here would deadlock the
+    # non-reentrant lock. It also keeps boto3 client construction off the
+    # critical section. Imported lazily to avoid a settings import at module
+    # load.
+    from .settings import get_settings
 
-        s = get_settings()
-        kind = (s.secrets_provider or "env").lower()
-        provider: SecretsProvider
-        if kind in {"env", ""}:
-            provider = EnvSecretsProvider()
-        elif kind in {"aws-secrets-manager", "secretsmanager", "asm"}:
-            provider = AwsSecretsManagerProvider(
-                region_name=s.aws_region,
-                prefix=s.secrets_prefix,
-            )
-        elif kind in {"aws-ssm", "ssm", "parameter-store"}:
-            provider = AwsSsmParameterProvider(
-                region_name=s.aws_region,
-                prefix=s.secrets_prefix,
-            )
-        else:
-            raise RuntimeError(f"unknown secrets provider {kind!r}")
-        _provider = provider
+    provider = provider_for_settings(get_settings())
+    with _lock:
+        if _provider is None:
+            _provider = provider
         return _provider
 
 

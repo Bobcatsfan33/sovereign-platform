@@ -16,6 +16,42 @@ _DEV_SENTINELS: dict[str, str] = {
 }
 
 
+# Settings field -> logical secret name. When a managed secrets provider is
+# configured (SECRETS_PROVIDER != env), get_settings() resolves each of
+# these from the backend at startup and overrides the env/dev value, so the
+# real secret — not a baked-in default — is what every service actually uses.
+# The provider prepends SECRETS_PREFIX, e.g. prefix "sovereign/prod/" + name
+# "broker-password" reads "sovereign/prod/broker-password".
+_MANAGED_SECRET_FIELDS: dict[str, str] = {
+    "dev_bearer_token": "service-bearer-token",
+    "broker_password": "broker-password",
+    "s3_access_key": "s3-access-key",
+    "s3_secret_key": "s3-secret-key",
+    "dev_jwt_secret": "jwt-signing-secret",
+    "audit_signing_private_key_pem": "audit-signing-private-key",
+    "siem_webhook_token": "siem-webhook-token",
+}
+
+
+def _resolve_managed_secrets(s: "Settings") -> None:
+    """When a managed provider is configured, fetch each mapped secret and
+    override the corresponding Settings field in place. No-op (and no
+    provider/network calls) for the env provider, so dev/CI stays hermetic.
+    Missing secrets are left at their existing value — the sentinel gate
+    below then fails closed if a required one was never supplied."""
+    kind = (s.secrets_provider or "env").lower()
+    if kind in {"env", ""}:
+        return
+    # Local import avoids a settings -> secrets cycle at module load.
+    from .secrets import provider_for_settings
+
+    provider = provider_for_settings(s)
+    for field, secret_name in _MANAGED_SECRET_FIELDS.items():
+        value = provider.get_optional(secret_name)
+        if value is not None:
+            setattr(s, field, value)
+
+
 def _env_bool(name: str, default: bool) -> bool:
     value = os.getenv(name)
     if value is None:
@@ -224,6 +260,7 @@ class Settings:
 @lru_cache
 def get_settings() -> Settings:
     s = Settings()
+    _resolve_managed_secrets(s)
     if _requires_real_secrets(s.env):
         live = [k for k, v in _DEV_SENTINELS.items() if getattr(s, k, None) == v]
         if live:
