@@ -182,6 +182,16 @@ with `SECRETS_PREFIX` for environment scoping; any non-development `ENV`
 refuses to start with the env-only provider unless `REQUIRE_MANAGED_SECRETS=false`
 is explicitly set for a temporary migration window.
 
+When a managed provider is configured, the sensitive settings are **resolved
+end-to-end** at startup: `get_settings()` fetches each one from the backend by
+logical name (`service-bearer-token`, `broker-password`, `s3-access-key`,
+`s3-secret-key`, `jwt-signing-secret`, `audit-signing-private-key`,
+`siem-webhook-token`, each under `SECRETS_PREFIX`) and overrides the env/dev
+value, so every service runs on the real secret rather than a baked-in default.
+A secret absent from the backend is left untouched and the sentinel gate then
+fails closed. The `env` provider path does no backend calls, keeping dev/CI
+hermetic.
+
 For service-to-service auth, production deployments should terminate mTLS
 at a trusted mesh/front door and pass an allow-listed `X-SPIFFE-ID` or
 `X-Sovereign-Workload-Identity` header to protected services. Set

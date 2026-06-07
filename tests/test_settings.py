@@ -191,6 +191,109 @@ def test_staging_fails_closed_for_dev_defaults(monkeypatch: pytest.MonkeyPatch) 
         settings_module.get_settings()
 
 
+class _FakeProvider:
+    """In-memory SecretsProvider stand-in for managed-secret resolution."""
+
+    def __init__(self, data: dict[str, str]) -> None:
+        self._data = data
+
+    def get(self, name: str) -> str:
+        from sovereign.secrets import SecretNotFoundError
+
+        if name in self._data:
+            return self._data[name]
+        raise SecretNotFoundError(name)
+
+    def get_optional(self, name: str, default: str | None = None) -> str | None:
+        return self._data.get(name, default)
+
+
+def test_managed_provider_resolves_and_overrides_dev_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With a managed provider configured, sensitive fields are fetched
+    from the backend and override the env/dev values end-to-end — so the
+    sentinel gate passes on real secrets, not baked-in defaults."""
+    from sovereign import settings as settings_module
+    from sovereign.secrets import reset_secrets_provider, set_secrets_provider
+
+    real = {
+        "service-bearer-token": "real-bearer",
+        "broker-password": "real-broker-pw",
+        "s3-secret-key": "real-sk",
+        "jwt-signing-secret": "real-jwt",
+    }
+    monkeypatch.setattr(settings_module.Settings, "env", "production")
+    monkeypatch.setattr(settings_module.Settings, "secrets_provider", "aws-secrets-manager")
+    monkeypatch.setattr(settings_module.Settings, "dev_bearer_token", "dev-token")
+    monkeypatch.setattr(settings_module.Settings, "broker_password", "broker")
+    monkeypatch.setattr(settings_module.Settings, "s3_secret_key", "minioadmin")
+    monkeypatch.setattr(settings_module.Settings, "strict_secrets", True)
+    monkeypatch.setattr(settings_module.Settings, "require_oidc", False)
+    monkeypatch.setattr(settings_module.Settings, "require_audit_signing", False)
+    reset_secrets_provider()
+    set_secrets_provider(_FakeProvider(real))  # type: ignore[arg-type]
+    settings_module.get_settings.cache_clear()
+    try:
+        s = settings_module.get_settings()
+        assert s.dev_bearer_token == "real-bearer"
+        assert s.broker_password == "real-broker-pw"
+        assert s.s3_secret_key == "real-sk"
+        assert s.dev_jwt_secret == "real-jwt"
+    finally:
+        reset_secrets_provider()
+        settings_module.get_settings.cache_clear()
+
+
+def test_managed_provider_missing_secret_still_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A managed provider that is missing a required secret leaves the dev
+    sentinel in place, so the strict gate still refuses to start."""
+    from sovereign import settings as settings_module
+    from sovereign.secrets import reset_secrets_provider, set_secrets_provider
+
+    # Everything resolves EXCEPT broker-password.
+    partial = {"service-bearer-token": "real-bearer", "s3-secret-key": "real-sk"}
+    monkeypatch.setattr(settings_module.Settings, "env", "production")
+    monkeypatch.setattr(settings_module.Settings, "secrets_provider", "aws-secrets-manager")
+    monkeypatch.setattr(settings_module.Settings, "broker_password", "broker")
+    monkeypatch.setattr(settings_module.Settings, "strict_secrets", True)
+    monkeypatch.setattr(settings_module.Settings, "require_oidc", False)
+    monkeypatch.setattr(settings_module.Settings, "require_audit_signing", False)
+    reset_secrets_provider()
+    set_secrets_provider(_FakeProvider(partial))  # type: ignore[arg-type]
+    settings_module.get_settings.cache_clear()
+    try:
+        with pytest.raises(RuntimeError, match="broker_password"):
+            settings_module.get_settings()
+    finally:
+        reset_secrets_provider()
+        settings_module.get_settings.cache_clear()
+
+
+def test_env_provider_skips_secret_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The env provider path is hermetic: an installed provider is never
+    consulted, so dev/CI does no backend calls."""
+    from sovereign import settings as settings_module
+    from sovereign.secrets import reset_secrets_provider, set_secrets_provider
+
+    monkeypatch.setattr(settings_module.Settings, "env", "dev")
+    monkeypatch.setattr(settings_module.Settings, "secrets_provider", "env")
+    monkeypatch.setattr(settings_module.Settings, "broker_password", "broker")
+    reset_secrets_provider()
+    set_secrets_provider(_FakeProvider({"broker-password": "should-not-be-used"}))  # type: ignore[arg-type]
+    settings_module.get_settings.cache_clear()
+    try:
+        s = settings_module.get_settings()
+        assert s.broker_password == "broker"
+    finally:
+        reset_secrets_provider()
+        settings_module.get_settings.cache_clear()
+
+
 def test_no_hardcoded_credentials_in_source() -> None:
     """Smoke check that the store modules don't carry hardcoded AWS creds."""
     from pathlib import Path
