@@ -212,6 +212,15 @@ but un-allow-listed identity is rejected `403`. The mesh must be configured
 to forward XFCC (Envoy: `forward_client_cert_details: sanitize_set` with the
 `uri` SAN included).
 
+The platform's own Envoy renderer produces exactly that config: provisioning
+a `sovereign-envoy-lb` instance with `mtls_enabled: true` now renders a
+listener that terminates mTLS (`DownstreamTlsContext`, `require_client_certificate`)
+and forwards the verified peer identity as XFCC (`SANITIZE_SET` +
+`set_current_client_cert_details: { uri: true }`) — so the rendered LB/sidecar
+is the producer of the XFCC the services above consume. TLS material is mounted
+by the deployment at `/etc/sovereign/tls` (`tls.crt` / `tls.key` / `ca.crt`),
+so cert rotation is a deployment concern, not a re-render.
+
 ## Errors
 
 Every service emits RFC 7807-style JSON problem detail on error:
