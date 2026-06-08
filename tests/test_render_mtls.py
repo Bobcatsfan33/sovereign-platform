@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 from sovereign.models import ProvisionRequest, ServiceInstance
-from sovereign.render import _build_doc, _MESH_TLS_DIR, render_envoy
+from sovereign.render import _MESH_TLS_DIR, _build_doc, render_envoy
 
 
 def _instance(*, mtls: bool) -> ServiceInstance:
