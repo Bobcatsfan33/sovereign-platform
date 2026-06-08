@@ -74,7 +74,9 @@ class ClusterConfig(_EnvoyModel):
     name: str
     connect_timeout: str = "2s"
     type: str
-    load_assignment: LoadAssignment
+    # Optional: ORIGINAL_DST / EDS clusters resolve endpoints dynamically and
+    # carry no static load_assignment. STRICT_DNS/STATIC clusters set it.
+    load_assignment: LoadAssignment | None = None
 
 
 class RouteMatch(_EnvoyModel):

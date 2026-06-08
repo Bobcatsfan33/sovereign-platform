@@ -287,61 +287,140 @@ def render_envoy(instance: ServiceInstance) -> str:
 
 
 #: Port the per-pod mesh sidecar listens on for inbound east-west traffic.
-#: The service routes here; the sidecar terminates mTLS and forwards plaintext
-#: to the co-located app on loopback.
+#: iptables redirects inbound connections here; the sidecar terminates mTLS
+#: and forwards plaintext to the co-located app on loopback.
 _SIDECAR_INBOUND_PORT = 15006
+
+#: Port the sidecar listens on for the app's OUTBOUND connections. iptables
+#: redirects the app's egress here; the sidecar originates mTLS to the
+#: connection's original destination (the peer's sidecar).
+_SIDECAR_OUTBOUND_PORT = 15001
 
 #: Cluster name for the co-located application the sidecar fronts.
 _LOCAL_APP_CLUSTER = "local_app"
 
+#: Cluster that mTLS-tunnels each outbound connection to its original
+#: destination (resolved per-connection, hence ORIGINAL_DST).
+_OUTBOUND_CLUSTER = "outbound_mtls"
+
+
+def _outbound_listener() -> dict[str, Any]:
+    """Captures the app's redirected egress and TCP-proxies each connection to
+    its original destination over mTLS (via `_OUTBOUND_CLUSTER`). Original-dst
+    keeps it transparent — the app still dials peers by their real address."""
+    return {
+        "name": "outbound_mtls",
+        "address": {
+            "socket_address": {"address": "0.0.0.0", "port_value": _SIDECAR_OUTBOUND_PORT}
+        },
+        "listener_filters": [
+            {
+                "name": "envoy.filters.listener.original_dst",
+                "typed_config": {
+                    "@type": "type.googleapis.com/envoy.extensions.filters.listener.original_dst.v3.OriginalDst"
+                },
+            }
+        ],
+        "filter_chains": [
+            {
+                "filters": [
+                    {
+                        "name": "envoy.filters.network.tcp_proxy",
+                        "typed_config": {
+                            "@type": "type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy",
+                            "stat_prefix": "outbound",
+                            "cluster": _OUTBOUND_CLUSTER,
+                        },
+                    }
+                ]
+            }
+        ],
+    }
+
+
+def _outbound_cluster() -> dict[str, Any]:
+    """ORIGINAL_DST cluster that originates mTLS to whatever address the app
+    was dialling. The peer's iptables redirects that connection into its own
+    inbound listener, which verifies this side's SVID."""
+    return {
+        "name": _OUTBOUND_CLUSTER,
+        "type": "ORIGINAL_DST",
+        "lb_policy": "CLUSTER_PROVIDED",
+        "connect_timeout": "2s",
+        "transport_socket": _upstream_tls_transport_socket(),
+    }
+
+
+def _inbound_hcm(service_name: str, *, with_xfcc: bool) -> dict[str, Any]:
+    """HttpConnectionManager network filter that routes everything to the
+    co-located app. XFCC is emitted only on the mTLS chain (`with_xfcc`); the
+    permissive plaintext chain has no verified cert to forward."""
+    return {
+        "name": "envoy.filters.network.http_connection_manager",
+        "typed_config": {
+            "@type": "type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager",
+            "stat_prefix": f"{service_name}_inbound",
+            "route_config": {
+                "name": "inbound_routes",
+                "virtual_hosts": [
+                    {
+                        "name": "local_app",
+                        "domains": ["*"],
+                        "routes": [
+                            {
+                                "match": {"prefix": "/"},
+                                "route": {"cluster": _LOCAL_APP_CLUSTER},
+                            }
+                        ],
+                    }
+                ],
+            },
+            **(_xfcc_hcm_fields() if with_xfcc else {}),
+            "http_filters": [
+                {
+                    "name": "envoy.filters.http.router",
+                    "typed_config": {
+                        "@type": "type.googleapis.com/envoy.extensions.filters.http.router.v3.Router"
+                    },
+                }
+            ],
+        },
+    }
+
 
 def _sidecar_doc(service_name: str, app_port: int) -> dict[str, Any]:
+    # mTLS chain: TLS connections must present a client cert; identity is
+    # forwarded as XFCC. The tls_inspector listener filter routes a connection
+    # to this chain (transport_protocol "tls") or the plaintext one below.
+    mtls_chain: dict[str, Any] = {
+        "filter_chain_match": {"transport_protocol": "tls"},
+        "transport_socket": _downstream_tls_transport_socket(),
+        "filters": [_inbound_hcm(service_name, with_xfcc=True)],
+    }
+    filter_chains: list[dict[str, Any]] = [mtls_chain]
+    if not get_settings().mesh_mtls_strict:
+        # Permissive rollout: also accept plaintext so not-yet-migrated callers
+        # keep working. Dropped once MESH_MTLS_STRICT flips on.
+        filter_chains.append(
+            {
+                "filter_chain_match": {"transport_protocol": "raw_buffer"},
+                "filters": [_inbound_hcm(service_name, with_xfcc=False)],
+            }
+        )
     inbound_listener: dict[str, Any] = {
         "name": "inbound_mtls",
         "address": {
             "socket_address": {"address": "0.0.0.0", "port_value": _SIDECAR_INBOUND_PORT}
         },
-        "filter_chains": [
+        "listener_filters": [
             {
-                # The sidecar is inherently mTLS — that is its whole job — so the
-                # transport socket and XFCC forwarding are unconditional here,
-                # unlike the tenant-LB path where they hang off `mtls_enabled`.
-                "transport_socket": _downstream_tls_transport_socket(),
-                "filters": [
-                    {
-                        "name": "envoy.filters.network.http_connection_manager",
-                        "typed_config": {
-                            "@type": "type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager",
-                            "stat_prefix": f"{service_name}_inbound",
-                            "route_config": {
-                                "name": "inbound_routes",
-                                "virtual_hosts": [
-                                    {
-                                        "name": "local_app",
-                                        "domains": ["*"],
-                                        "routes": [
-                                            {
-                                                "match": {"prefix": "/"},
-                                                "route": {"cluster": _LOCAL_APP_CLUSTER},
-                                            }
-                                        ],
-                                    }
-                                ],
-                            },
-                            **_xfcc_hcm_fields(),
-                            "http_filters": [
-                                {
-                                    "name": "envoy.filters.http.router",
-                                    "typed_config": {
-                                        "@type": "type.googleapis.com/envoy.extensions.filters.http.router.v3.Router"
-                                    },
-                                }
-                            ],
-                        },
-                    }
-                ],
+                "name": "envoy.filters.listener.tls_inspector",
+                "typed_config": {
+                    "@type": "type.googleapis.com/envoy.extensions.filters.listener.tls_inspector.v3.TlsInspector"
+                },
             }
         ],
+        "filter_chains": filter_chains,
     }
     # Loopback to the app is a trusted in-pod hop — plaintext, no transport socket.
     local_app_cluster: dict[str, Any] = {
@@ -368,11 +447,14 @@ def _sidecar_doc(service_name: str, app_port: int) -> dict[str, Any]:
             ],
         },
     }
-    clusters = [local_app_cluster]
+    clusters = [local_app_cluster, _outbound_cluster()]
     if get_settings().mesh_sds_enabled:
         clusters.append(_sds_cluster())
     return {
-        "static_resources": {"listeners": [inbound_listener], "clusters": clusters},
+        "static_resources": {
+            "listeners": [inbound_listener, _outbound_listener()],
+            "clusters": clusters,
+        },
         "admin": {
             "access_log_path": "/tmp/admin_access.log",
             "address": {"socket_address": {"address": "127.0.0.1", "port_value": 9901}},
@@ -382,10 +464,15 @@ def _sidecar_doc(service_name: str, app_port: int) -> dict[str, Any]:
 
 def render_sidecar_bootstrap(service_name: str, app_port: int) -> str:
     """Render the Envoy bootstrap (YAML) for a chassis service's per-pod mesh
-    sidecar. The inbound listener terminates mTLS — fetching its SVID/bundle
-    over SDS when `MESH_SDS_ENABLED` — and forwards decrypted HTTP to the
-    co-located app on 127.0.0.1:`app_port`, emitting XFCC so the app's
-    `require_bearer` sees the verified peer identity."""
+    sidecar — both directions, for transparent (iptables-redirect) injection.
+
+    Inbound (:15006): terminates mTLS — fetching its SVID/bundle over SDS when
+    `MESH_SDS_ENABLED` — and forwards decrypted HTTP to the co-located app on
+    127.0.0.1:`app_port`, emitting XFCC so the app's `require_bearer` sees the
+    verified peer identity. Outbound (:15001): captures the app's redirected
+    egress and originates mTLS to each connection's original destination, so
+    east-west traffic is mutually authenticated without the app changing how
+    it dials peers."""
     doc = _sidecar_doc(service_name, app_port)
     try:
         validate_bootstrap(doc)
