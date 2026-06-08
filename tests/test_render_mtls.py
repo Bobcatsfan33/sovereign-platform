@@ -35,11 +35,16 @@ def _hcm(doc: dict[str, Any]) -> dict[str, Any]:
     return _filter_chain(doc)["filters"][0]["typed_config"]
 
 
+def _cluster(doc: dict[str, Any]) -> dict[str, Any]:
+    return doc["static_resources"]["clusters"][0]
+
+
 def test_plaintext_listener_has_no_tls_or_xfcc() -> None:
     """Default (mtls_enabled=False) is unchanged: no transport socket, no
-    client-cert forwarding."""
+    client-cert forwarding, and no upstream TLS on clusters."""
     doc = _build_doc(_instance(mtls=False))
     assert "transport_socket" not in _filter_chain(doc)
+    assert "transport_socket" not in _cluster(doc)
     hcm = _hcm(doc)
     assert "forward_client_cert_details" not in hcm
     assert "set_current_client_cert_details" not in hcm
@@ -66,11 +71,23 @@ def test_mtls_listener_forwards_xfcc_uri() -> None:
     assert hcm["set_current_client_cert_details"] == {"uri": True}
 
 
+def test_mtls_cluster_originates_upstream_tls() -> None:
+    """The mirror of downstream termination: when mTLS is on, each cluster
+    presents this workload's client cert to its backends (UpstreamTlsContext)
+    so the upstream hop is mutually authenticated, not plaintext."""
+    tc = _cluster(_build_doc(_instance(mtls=True)))["transport_socket"]["typed_config"]
+    assert tc["@type"].endswith("UpstreamTlsContext")
+    common = tc["common_tls_context"]
+    assert common["tls_certificates"][0]["certificate_chain"]["filename"] == f"{_MESH_TLS_DIR}/tls.crt"
+    assert common["validation_context"]["trusted_ca"]["filename"] == f"{_MESH_TLS_DIR}/ca.crt"
+
+
 def test_mtls_doc_passes_schema_validation() -> None:
     """render_envoy validates the assembled doc; the mTLS additions must
     satisfy validate_bootstrap and survive YAML serialisation."""
     rendered = render_envoy(_instance(mtls=True))
     assert "DownstreamTlsContext" in rendered
+    assert "UpstreamTlsContext" in rendered
     assert "SANITIZE_SET" in rendered
 
 
