@@ -6,24 +6,22 @@
 # tests/test_mesh_sidecar_wiring.py re-renders and asserts these match, so
 # regenerate (not hand-edit) when the renderer changes.
 #
-# ROLLOUT (two-phase, like Istio's permissive→strict):
-#   0. Deploy SPIRE first (spire.yaml). Pods that inject the sidecar go
-#      NotReady until the agent can issue SVIDs, so the agent must be healthy.
-#   1. INJECT (per backend Deployment in production.yaml): add an
-#      `envoy-sidecar` container that runs `envoy -c /etc/envoy/envoy.yaml`,
+# ROLLOUT (transparent / iptables-redirect, Istio-style):
+#   0. Deploy SPIRE first (spire.yaml). A sidecar that cannot get an SVID goes
+#      NotReady and drops its pod from Service endpoints, so the agent must be
+#      healthy before injection.
+#   1. INJECT (per backend Deployment in production.yaml): an init container
+#      programs iptables to redirect inbound -> :15006 and the app's outbound
+#      -> :15001, excluding the sidecar's own uid and loopback; plus the
+#      `envoy-sidecar` container running `envoy -c /etc/envoy/envoy.yaml`,
 #      mounting this ConfigMap at /etc/envoy and the SPIRE socket dir
-#      (hostPath /run/spire/sockets) read-only, hardened (drop ALL, no
-#      privilege escalation, tcpSocket readiness on the inbound port 15006),
-#      plus an emptyDir at /tmp for the admin log.
-#   2. INBOUND cutover: point each Service's targetPort at the sidecar's
-#      `mesh` port (15006). Peers then hit the sidecar, which terminates mTLS
-#      and forwards to the app on 127.0.0.1 with XFCC.
-#   3. OUTBOUND (the open decision): an app's egress is NOT yet mTLS. Either
-#      (a) add an iptables-redirect init container — needs NET_ADMIN, which
-#      conflicts with the current drop:[ALL] hardening — or (b) give the
-#      sidecar per-peer egress listeners and repoint each *_SERVICE_URL at
-#      127.0.0.1:<egress-port>. Until this lands, only do step 2 for services
-#      whose callers already present a client cert, or east-west breaks.
+#      (hostPath /run/spire/sockets) read-only.
+#   2. The init container needs NET_ADMIN/NET_RAW, which the `restricted` Pod
+#      Security Standard forbids — the namespace enforce level is relaxed for
+#      the mesh pods as part of injection. The app + envoy containers stay
+#      hardened (drop:[ALL], no privilege escalation, read-only rootfs).
+#   3. No app changes and no Service retarget: iptables makes inbound mTLS
+#      termination and outbound mTLS origination transparent to the workload.
 
 ---
 apiVersion: v1
@@ -40,8 +38,14 @@ data:
           socket_address:
             address: 0.0.0.0
             port_value: 15006
+        listener_filters:
+        - name: envoy.filters.listener.tls_inspector
+          typed_config:
+            '@type': type.googleapis.com/envoy.extensions.filters.listener.tls_inspector.v3.TlsInspector
         filter_chains:
-        - transport_socket:
+        - filter_chain_match:
+            transport_protocol: tls
+          transport_socket:
             name: envoy.transport_sockets.tls
             typed_config:
               '@type': type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
@@ -88,6 +92,44 @@ data:
               - name: envoy.filters.http.router
                 typed_config:
                   '@type': type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+        - filter_chain_match:
+            transport_protocol: raw_buffer
+          filters:
+          - name: envoy.filters.network.http_connection_manager
+            typed_config:
+              '@type': type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+              stat_prefix: broker_inbound
+              route_config:
+                name: inbound_routes
+                virtual_hosts:
+                - name: local_app
+                  domains:
+                  - '*'
+                  routes:
+                  - match:
+                      prefix: /
+                    route:
+                      cluster: local_app
+              http_filters:
+              - name: envoy.filters.http.router
+                typed_config:
+                  '@type': type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+      - name: outbound_mtls
+        address:
+          socket_address:
+            address: 0.0.0.0
+            port_value: 15001
+        listener_filters:
+        - name: envoy.filters.listener.original_dst
+          typed_config:
+            '@type': type.googleapis.com/envoy.extensions.filters.listener.original_dst.v3.OriginalDst
+        filter_chains:
+        - filters:
+          - name: envoy.filters.network.tcp_proxy
+            typed_config:
+              '@type': type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
+              stat_prefix: outbound
+              cluster: outbound_mtls
       clusters:
       - name: local_app
         connect_timeout: 2s
@@ -101,6 +143,33 @@ data:
                   socket_address:
                     address: 127.0.0.1
                     port_value: 8080
+      - name: outbound_mtls
+        type: ORIGINAL_DST
+        lb_policy: CLUSTER_PROVIDED
+        connect_timeout: 2s
+        transport_socket:
+          name: envoy.transport_sockets.tls
+          typed_config:
+            '@type': type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+            common_tls_context:
+              tls_certificate_sds_secret_configs:
+              - name: spiffe://sovereign-platform/broker
+                sds_config:
+                  api_config_source:
+                    api_type: GRPC
+                    transport_api_version: V3
+                    grpc_services:
+                    - envoy_grpc:
+                        cluster_name: spiffe_sds
+              validation_context_sds_secret_config:
+                name: spiffe://sovereign-platform
+                sds_config:
+                  api_config_source:
+                    api_type: GRPC
+                    transport_api_version: V3
+                    grpc_services:
+                    - envoy_grpc:
+                        cluster_name: spiffe_sds
       - name: spiffe_sds
         type: STATIC
         connect_timeout: 1s
@@ -135,8 +204,14 @@ data:
           socket_address:
             address: 0.0.0.0
             port_value: 15006
+        listener_filters:
+        - name: envoy.filters.listener.tls_inspector
+          typed_config:
+            '@type': type.googleapis.com/envoy.extensions.filters.listener.tls_inspector.v3.TlsInspector
         filter_chains:
-        - transport_socket:
+        - filter_chain_match:
+            transport_protocol: tls
+          transport_socket:
             name: envoy.transport_sockets.tls
             typed_config:
               '@type': type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
@@ -183,6 +258,44 @@ data:
               - name: envoy.filters.http.router
                 typed_config:
                   '@type': type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+        - filter_chain_match:
+            transport_protocol: raw_buffer
+          filters:
+          - name: envoy.filters.network.http_connection_manager
+            typed_config:
+              '@type': type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+              stat_prefix: control-plane_inbound
+              route_config:
+                name: inbound_routes
+                virtual_hosts:
+                - name: local_app
+                  domains:
+                  - '*'
+                  routes:
+                  - match:
+                      prefix: /
+                    route:
+                      cluster: local_app
+              http_filters:
+              - name: envoy.filters.http.router
+                typed_config:
+                  '@type': type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+      - name: outbound_mtls
+        address:
+          socket_address:
+            address: 0.0.0.0
+            port_value: 15001
+        listener_filters:
+        - name: envoy.filters.listener.original_dst
+          typed_config:
+            '@type': type.googleapis.com/envoy.extensions.filters.listener.original_dst.v3.OriginalDst
+        filter_chains:
+        - filters:
+          - name: envoy.filters.network.tcp_proxy
+            typed_config:
+              '@type': type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
+              stat_prefix: outbound
+              cluster: outbound_mtls
       clusters:
       - name: local_app
         connect_timeout: 2s
@@ -196,6 +309,33 @@ data:
                   socket_address:
                     address: 127.0.0.1
                     port_value: 8090
+      - name: outbound_mtls
+        type: ORIGINAL_DST
+        lb_policy: CLUSTER_PROVIDED
+        connect_timeout: 2s
+        transport_socket:
+          name: envoy.transport_sockets.tls
+          typed_config:
+            '@type': type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+            common_tls_context:
+              tls_certificate_sds_secret_configs:
+              - name: spiffe://sovereign-platform/control-plane
+                sds_config:
+                  api_config_source:
+                    api_type: GRPC
+                    transport_api_version: V3
+                    grpc_services:
+                    - envoy_grpc:
+                        cluster_name: spiffe_sds
+              validation_context_sds_secret_config:
+                name: spiffe://sovereign-platform
+                sds_config:
+                  api_config_source:
+                    api_type: GRPC
+                    transport_api_version: V3
+                    grpc_services:
+                    - envoy_grpc:
+                        cluster_name: spiffe_sds
       - name: spiffe_sds
         type: STATIC
         connect_timeout: 1s
@@ -230,8 +370,14 @@ data:
           socket_address:
             address: 0.0.0.0
             port_value: 15006
+        listener_filters:
+        - name: envoy.filters.listener.tls_inspector
+          typed_config:
+            '@type': type.googleapis.com/envoy.extensions.filters.listener.tls_inspector.v3.TlsInspector
         filter_chains:
-        - transport_socket:
+        - filter_chain_match:
+            transport_protocol: tls
+          transport_socket:
             name: envoy.transport_sockets.tls
             typed_config:
               '@type': type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
@@ -278,6 +424,44 @@ data:
               - name: envoy.filters.http.router
                 typed_config:
                   '@type': type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+        - filter_chain_match:
+            transport_protocol: raw_buffer
+          filters:
+          - name: envoy.filters.network.http_connection_manager
+            typed_config:
+              '@type': type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+              stat_prefix: audit-service_inbound
+              route_config:
+                name: inbound_routes
+                virtual_hosts:
+                - name: local_app
+                  domains:
+                  - '*'
+                  routes:
+                  - match:
+                      prefix: /
+                    route:
+                      cluster: local_app
+              http_filters:
+              - name: envoy.filters.http.router
+                typed_config:
+                  '@type': type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+      - name: outbound_mtls
+        address:
+          socket_address:
+            address: 0.0.0.0
+            port_value: 15001
+        listener_filters:
+        - name: envoy.filters.listener.original_dst
+          typed_config:
+            '@type': type.googleapis.com/envoy.extensions.filters.listener.original_dst.v3.OriginalDst
+        filter_chains:
+        - filters:
+          - name: envoy.filters.network.tcp_proxy
+            typed_config:
+              '@type': type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
+              stat_prefix: outbound
+              cluster: outbound_mtls
       clusters:
       - name: local_app
         connect_timeout: 2s
@@ -291,6 +475,33 @@ data:
                   socket_address:
                     address: 127.0.0.1
                     port_value: 8086
+      - name: outbound_mtls
+        type: ORIGINAL_DST
+        lb_policy: CLUSTER_PROVIDED
+        connect_timeout: 2s
+        transport_socket:
+          name: envoy.transport_sockets.tls
+          typed_config:
+            '@type': type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+            common_tls_context:
+              tls_certificate_sds_secret_configs:
+              - name: spiffe://sovereign-platform/audit-service
+                sds_config:
+                  api_config_source:
+                    api_type: GRPC
+                    transport_api_version: V3
+                    grpc_services:
+                    - envoy_grpc:
+                        cluster_name: spiffe_sds
+              validation_context_sds_secret_config:
+                name: spiffe://sovereign-platform
+                sds_config:
+                  api_config_source:
+                    api_type: GRPC
+                    transport_api_version: V3
+                    grpc_services:
+                    - envoy_grpc:
+                        cluster_name: spiffe_sds
       - name: spiffe_sds
         type: STATIC
         connect_timeout: 1s
@@ -325,8 +536,14 @@ data:
           socket_address:
             address: 0.0.0.0
             port_value: 15006
+        listener_filters:
+        - name: envoy.filters.listener.tls_inspector
+          typed_config:
+            '@type': type.googleapis.com/envoy.extensions.filters.listener.tls_inspector.v3.TlsInspector
         filter_chains:
-        - transport_socket:
+        - filter_chain_match:
+            transport_protocol: tls
+          transport_socket:
             name: envoy.transport_sockets.tls
             typed_config:
               '@type': type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
@@ -373,6 +590,44 @@ data:
               - name: envoy.filters.http.router
                 typed_config:
                   '@type': type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+        - filter_chain_match:
+            transport_protocol: raw_buffer
+          filters:
+          - name: envoy.filters.network.http_connection_manager
+            typed_config:
+              '@type': type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+              stat_prefix: metering-service_inbound
+              route_config:
+                name: inbound_routes
+                virtual_hosts:
+                - name: local_app
+                  domains:
+                  - '*'
+                  routes:
+                  - match:
+                      prefix: /
+                    route:
+                      cluster: local_app
+              http_filters:
+              - name: envoy.filters.http.router
+                typed_config:
+                  '@type': type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+      - name: outbound_mtls
+        address:
+          socket_address:
+            address: 0.0.0.0
+            port_value: 15001
+        listener_filters:
+        - name: envoy.filters.listener.original_dst
+          typed_config:
+            '@type': type.googleapis.com/envoy.extensions.filters.listener.original_dst.v3.OriginalDst
+        filter_chains:
+        - filters:
+          - name: envoy.filters.network.tcp_proxy
+            typed_config:
+              '@type': type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
+              stat_prefix: outbound
+              cluster: outbound_mtls
       clusters:
       - name: local_app
         connect_timeout: 2s
@@ -386,6 +641,33 @@ data:
                   socket_address:
                     address: 127.0.0.1
                     port_value: 8087
+      - name: outbound_mtls
+        type: ORIGINAL_DST
+        lb_policy: CLUSTER_PROVIDED
+        connect_timeout: 2s
+        transport_socket:
+          name: envoy.transport_sockets.tls
+          typed_config:
+            '@type': type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+            common_tls_context:
+              tls_certificate_sds_secret_configs:
+              - name: spiffe://sovereign-platform/metering-service
+                sds_config:
+                  api_config_source:
+                    api_type: GRPC
+                    transport_api_version: V3
+                    grpc_services:
+                    - envoy_grpc:
+                        cluster_name: spiffe_sds
+              validation_context_sds_secret_config:
+                name: spiffe://sovereign-platform
+                sds_config:
+                  api_config_source:
+                    api_type: GRPC
+                    transport_api_version: V3
+                    grpc_services:
+                    - envoy_grpc:
+                        cluster_name: spiffe_sds
       - name: spiffe_sds
         type: STATIC
         connect_timeout: 1s

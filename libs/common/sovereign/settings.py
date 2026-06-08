@@ -272,6 +272,11 @@ class Settings:
     mesh_sds_socket_path: str = os.getenv(
         "MESH_SDS_SOCKET_PATH", "/run/spire/sockets/agent.sock"
     )
+    # Mesh sidecar inbound posture. Permissive (default) accepts BOTH mTLS and
+    # plaintext on the inbound listener, so a half-migrated mesh keeps working
+    # during rollout; flip to strict (MESH_MTLS_STRICT=true) once every caller
+    # is confirmed mTLS, which then drops the plaintext filter chain.
+    mesh_mtls_strict: bool = _env_bool("MESH_MTLS_STRICT", default=False)
 
     def mesh_trust_domain(self) -> str:
         """SPIFFE trust domain, parsed from the asserted identity
