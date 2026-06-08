@@ -284,3 +284,113 @@ def render_envoy(instance: ServiceInstance) -> str:
             f"rendered Envoy config failed schema validation: {exc}"
         ) from exc
     return yaml.safe_dump(doc, sort_keys=False)
+
+
+#: Port the per-pod mesh sidecar listens on for inbound east-west traffic.
+#: The service routes here; the sidecar terminates mTLS and forwards plaintext
+#: to the co-located app on loopback.
+_SIDECAR_INBOUND_PORT = 15006
+
+#: Cluster name for the co-located application the sidecar fronts.
+_LOCAL_APP_CLUSTER = "local_app"
+
+
+def _sidecar_doc(service_name: str, app_port: int) -> dict[str, Any]:
+    inbound_listener: dict[str, Any] = {
+        "name": "inbound_mtls",
+        "address": {
+            "socket_address": {"address": "0.0.0.0", "port_value": _SIDECAR_INBOUND_PORT}
+        },
+        "filter_chains": [
+            {
+                # The sidecar is inherently mTLS — that is its whole job — so the
+                # transport socket and XFCC forwarding are unconditional here,
+                # unlike the tenant-LB path where they hang off `mtls_enabled`.
+                "transport_socket": _downstream_tls_transport_socket(),
+                "filters": [
+                    {
+                        "name": "envoy.filters.network.http_connection_manager",
+                        "typed_config": {
+                            "@type": "type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager",
+                            "stat_prefix": f"{service_name}_inbound",
+                            "route_config": {
+                                "name": "inbound_routes",
+                                "virtual_hosts": [
+                                    {
+                                        "name": "local_app",
+                                        "domains": ["*"],
+                                        "routes": [
+                                            {
+                                                "match": {"prefix": "/"},
+                                                "route": {"cluster": _LOCAL_APP_CLUSTER},
+                                            }
+                                        ],
+                                    }
+                                ],
+                            },
+                            **_xfcc_hcm_fields(),
+                            "http_filters": [
+                                {
+                                    "name": "envoy.filters.http.router",
+                                    "typed_config": {
+                                        "@type": "type.googleapis.com/envoy.extensions.filters.http.router.v3.Router"
+                                    },
+                                }
+                            ],
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+    # Loopback to the app is a trusted in-pod hop — plaintext, no transport socket.
+    local_app_cluster: dict[str, Any] = {
+        "name": _LOCAL_APP_CLUSTER,
+        "connect_timeout": "2s",
+        "type": "STATIC",
+        "load_assignment": {
+            "cluster_name": _LOCAL_APP_CLUSTER,
+            "endpoints": [
+                {
+                    "lb_endpoints": [
+                        {
+                            "endpoint": {
+                                "address": {
+                                    "socket_address": {
+                                        "address": "127.0.0.1",
+                                        "port_value": app_port,
+                                    }
+                                }
+                            }
+                        }
+                    ]
+                }
+            ],
+        },
+    }
+    clusters = [local_app_cluster]
+    if get_settings().mesh_sds_enabled:
+        clusters.append(_sds_cluster())
+    return {
+        "static_resources": {"listeners": [inbound_listener], "clusters": clusters},
+        "admin": {
+            "access_log_path": "/tmp/admin_access.log",
+            "address": {"socket_address": {"address": "127.0.0.1", "port_value": 9901}},
+        },
+    }
+
+
+def render_sidecar_bootstrap(service_name: str, app_port: int) -> str:
+    """Render the Envoy bootstrap (YAML) for a chassis service's per-pod mesh
+    sidecar. The inbound listener terminates mTLS — fetching its SVID/bundle
+    over SDS when `MESH_SDS_ENABLED` — and forwards decrypted HTTP to the
+    co-located app on 127.0.0.1:`app_port`, emitting XFCC so the app's
+    `require_bearer` sees the verified peer identity."""
+    doc = _sidecar_doc(service_name, app_port)
+    try:
+        validate_bootstrap(doc)
+    except ValidationError as exc:
+        raise RenderValidationError(
+            f"rendered sidecar config failed schema validation: {exc}"
+        ) from exc
+    return yaml.safe_dump(doc, sort_keys=False)
