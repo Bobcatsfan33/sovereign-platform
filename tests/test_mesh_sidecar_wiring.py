@@ -69,6 +69,63 @@ def test_backend_deployments_assert_their_spiffe_identity() -> None:
         assert env.get("SERVICE_NAME") == service
 
 
+def test_backend_pods_inject_sidecar_and_iptables() -> None:
+    """Each backend pod runs the Envoy sidecar (as uid 1337, mounting its
+    bootstrap + the SPIRE socket) and an iptables init container that captures
+    traffic to the sidecar ports."""
+    deployments = {
+        d["metadata"]["name"]: d
+        for d in _docs("production.yaml")
+        if d.get("kind") == "Deployment"
+    }
+    for service in BACKEND_SERVICES:
+        spec = deployments[service]["spec"]["template"]["spec"]
+        sidecar = next(c for c in spec["containers"] if c["name"] == "envoy-sidecar")
+        assert sidecar["securityContext"]["runAsUser"] == 1337
+        assert ":latest" not in sidecar["image"]
+        mounts = {m["name"]: m for m in sidecar["volumeMounts"]}
+        assert mounts["sidecar-bootstrap"]["mountPath"] == "/etc/envoy"
+        assert mounts["spire-agent-socket"]["mountPath"] == "/run/spire/sockets"
+
+        init = next(c for c in spec["initContainers"] if c["name"] == "mesh-iptables")
+        caps = init["securityContext"]["capabilities"]["add"]
+        assert "NET_ADMIN" in caps and "NET_RAW" in caps
+
+        vols = {v["name"]: v for v in spec["volumes"]}
+        assert vols["sidecar-bootstrap"]["configMap"]["name"] == f"sidecar-bootstrap-{service}"
+        assert vols["spire-agent-socket"]["hostPath"]["path"] == "/run/spire/sockets"
+
+
+def test_iptables_excludes_control_plane_and_redirects_to_sidecar() -> None:
+    """The redirect must exclude DNS / kube-API / SPIRE (or the sidecar can't
+    reach SPIRE to get the SVID it needs to serve), skip its own uid, and
+    redirect to the sidecar's inbound/outbound ports."""
+    broker = next(
+        d
+        for d in _docs("production.yaml")
+        if d.get("kind") == "Deployment" and d["metadata"]["name"] == "broker"
+    )
+    init = next(
+        c
+        for c in broker["spec"]["template"]["spec"]["initContainers"]
+        if c["name"] == "mesh-iptables"
+    )
+    script = "\n".join(init["args"])
+    for excluded in ("--dport 53", "--dport 443", "--dport 8081", "--uid-owner 1337"):
+        assert excluded in script
+    assert "--to-ports 15001" in script  # outbound
+    assert "--to-ports 15006" in script  # inbound
+
+
+def test_namespace_pss_relaxed_for_iptables_init() -> None:
+    ns = next(d for d in _docs("production.yaml") if d.get("kind") == "Namespace")
+    labels = ns["metadata"]["labels"]
+    assert labels["pod-security.kubernetes.io/enforce"] == "privileged"
+    # Visibility is retained even though enforcement is relaxed.
+    assert labels["pod-security.kubernetes.io/audit"] == "restricted"
+    assert labels["pod-security.kubernetes.io/warn"] == "restricted"
+
+
 def test_identity_matches_allowlist_and_spire_registration() -> None:
     """The asserted identities, the inbound allowlist, and the SPIRE
     registration entries must name the same SPIFFE ids — otherwise a verified

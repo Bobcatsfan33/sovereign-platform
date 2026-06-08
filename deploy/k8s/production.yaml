@@ -3,7 +3,13 @@ kind: Namespace
 metadata:
   name: sovereign-platform
   labels:
-    pod-security.kubernetes.io/enforce: restricted
+    # The mesh-iptables init container needs NET_ADMIN/NET_RAW, which the
+    # `restricted` PSS forbids, so enforce is relaxed to `privileged` for this
+    # namespace (the trade-off you accepted for transparent iptables egress).
+    # audit/warn stay at `restricted` so every workload is still flagged if it
+    # drifts from the hardened baseline, and the app + envoy containers keep
+    # drop:[ALL]/no-priv-escalation/read-only-rootfs regardless.
+    pod-security.kubernetes.io/enforce: privileged
     pod-security.kubernetes.io/audit: restricted
     pod-security.kubernetes.io/warn: restricted
 ---
@@ -27,6 +33,12 @@ data:
   REQUIRE_OIDC: "true"
   REQUIRE_MANAGED_SECRETS: "true"
   SECRETS_PROVIDER: aws-secrets-manager
+  # Permissive rollout: the inbound listener accepts plaintext too, so the app
+  # must still authorize non-mTLS callers (no XFCC yet) — hence MTLS_REQUIRED
+  # off for now. STRICT CUTOVER: regenerate mesh-sidecars.yaml with
+  # MESH_MTLS_STRICT=true (drops the plaintext chain) AND set MTLS_REQUIRED=true
+  # here, once every caller is confirmed mTLS.
+  MTLS_REQUIRED: "false"
 ---
 apiVersion: v1
 kind: Secret
@@ -160,6 +172,65 @@ spec:
             allowPrivilegeEscalation: false
             capabilities: { drop: [ALL] }
             readOnlyRootFilesystem: true
+        - name: envoy-sidecar
+          image: envoyproxy/envoy:v1.31.5
+          imagePullPolicy: IfNotPresent
+          args: ["-c", "/etc/envoy/envoy.yaml", "--service-cluster", "broker"]
+          ports:
+            - { name: mesh-in, containerPort: 15006 }
+            - { name: mesh-out, containerPort: 15001 }
+          readinessProbe: { tcpSocket: { port: mesh-in }, initialDelaySeconds: 3, periodSeconds: 10 }
+          livenessProbe: { tcpSocket: { port: mesh-in }, initialDelaySeconds: 10, periodSeconds: 20 }
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 250m, memory: 256Mi }
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1337
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - { name: sidecar-bootstrap, mountPath: /etc/envoy, readOnly: true }
+            - { name: spire-agent-socket, mountPath: /run/spire/sockets, readOnly: true }
+            - { name: envoy-tmp, mountPath: /tmp }
+      initContainers:
+        - name: mesh-iptables
+          image: registry.k8s.io/build-image/debian-iptables:bookworm-v1.0.0
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              # Inbound -> sidecar :15006, app egress -> sidecar :15001. Exclude
+              # the sidecar's own uid (1337), loopback, and the control plane
+              # (DNS 53, kube API 443, SPIRE 8081) so the SVID bootstrap path is
+              # never captured. Tighten 443 to the API server CIDR per cluster.
+              iptables -t nat -N SOV_OUT
+              iptables -t nat -A OUTPUT -p tcp -j SOV_OUT
+              iptables -t nat -A SOV_OUT -m owner --uid-owner 1337 -j RETURN
+              iptables -t nat -A SOV_OUT -o lo -j RETURN
+              iptables -t nat -A SOV_OUT -p tcp --dport 53 -j RETURN
+              iptables -t nat -A SOV_OUT -p tcp --dport 443 -j RETURN
+              iptables -t nat -A SOV_OUT -p tcp --dport 8081 -j RETURN
+              iptables -t nat -A SOV_OUT -p tcp -j REDIRECT --to-ports 15001
+              iptables -t nat -N SOV_IN
+              iptables -t nat -A PREROUTING -p tcp -j SOV_IN
+              iptables -t nat -A SOV_IN -p tcp --dport 15006 -j RETURN
+              iptables -t nat -A SOV_IN -p tcp --dport 15001 -j RETURN
+              iptables -t nat -A SOV_IN -p tcp -j REDIRECT --to-ports 15006
+          securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+            allowPrivilegeEscalation: false
+            capabilities: { add: [NET_ADMIN, NET_RAW], drop: [ALL] }
+            readOnlyRootFilesystem: true
+      volumes:
+        - name: sidecar-bootstrap
+          configMap: { name: sidecar-bootstrap-broker }
+        - name: spire-agent-socket
+          hostPath: { path: /run/spire/sockets, type: DirectoryOrCreate }
+        - name: envoy-tmp
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
@@ -207,6 +278,65 @@ spec:
             allowPrivilegeEscalation: false
             capabilities: { drop: [ALL] }
             readOnlyRootFilesystem: true
+        - name: envoy-sidecar
+          image: envoyproxy/envoy:v1.31.5
+          imagePullPolicy: IfNotPresent
+          args: ["-c", "/etc/envoy/envoy.yaml", "--service-cluster", "control-plane"]
+          ports:
+            - { name: mesh-in, containerPort: 15006 }
+            - { name: mesh-out, containerPort: 15001 }
+          readinessProbe: { tcpSocket: { port: mesh-in }, initialDelaySeconds: 3, periodSeconds: 10 }
+          livenessProbe: { tcpSocket: { port: mesh-in }, initialDelaySeconds: 10, periodSeconds: 20 }
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 250m, memory: 256Mi }
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1337
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - { name: sidecar-bootstrap, mountPath: /etc/envoy, readOnly: true }
+            - { name: spire-agent-socket, mountPath: /run/spire/sockets, readOnly: true }
+            - { name: envoy-tmp, mountPath: /tmp }
+      initContainers:
+        - name: mesh-iptables
+          image: registry.k8s.io/build-image/debian-iptables:bookworm-v1.0.0
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              # Inbound -> sidecar :15006, app egress -> sidecar :15001. Exclude
+              # the sidecar's own uid (1337), loopback, and the control plane
+              # (DNS 53, kube API 443, SPIRE 8081) so the SVID bootstrap path is
+              # never captured. Tighten 443 to the API server CIDR per cluster.
+              iptables -t nat -N SOV_OUT
+              iptables -t nat -A OUTPUT -p tcp -j SOV_OUT
+              iptables -t nat -A SOV_OUT -m owner --uid-owner 1337 -j RETURN
+              iptables -t nat -A SOV_OUT -o lo -j RETURN
+              iptables -t nat -A SOV_OUT -p tcp --dport 53 -j RETURN
+              iptables -t nat -A SOV_OUT -p tcp --dport 443 -j RETURN
+              iptables -t nat -A SOV_OUT -p tcp --dport 8081 -j RETURN
+              iptables -t nat -A SOV_OUT -p tcp -j REDIRECT --to-ports 15001
+              iptables -t nat -N SOV_IN
+              iptables -t nat -A PREROUTING -p tcp -j SOV_IN
+              iptables -t nat -A SOV_IN -p tcp --dport 15006 -j RETURN
+              iptables -t nat -A SOV_IN -p tcp --dport 15001 -j RETURN
+              iptables -t nat -A SOV_IN -p tcp -j REDIRECT --to-ports 15006
+          securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+            allowPrivilegeEscalation: false
+            capabilities: { add: [NET_ADMIN, NET_RAW], drop: [ALL] }
+            readOnlyRootFilesystem: true
+      volumes:
+        - name: sidecar-bootstrap
+          configMap: { name: sidecar-bootstrap-control-plane }
+        - name: spire-agent-socket
+          hostPath: { path: /run/spire/sockets, type: DirectoryOrCreate }
+        - name: envoy-tmp
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
@@ -254,6 +384,65 @@ spec:
             allowPrivilegeEscalation: false
             capabilities: { drop: [ALL] }
             readOnlyRootFilesystem: true
+        - name: envoy-sidecar
+          image: envoyproxy/envoy:v1.31.5
+          imagePullPolicy: IfNotPresent
+          args: ["-c", "/etc/envoy/envoy.yaml", "--service-cluster", "audit-service"]
+          ports:
+            - { name: mesh-in, containerPort: 15006 }
+            - { name: mesh-out, containerPort: 15001 }
+          readinessProbe: { tcpSocket: { port: mesh-in }, initialDelaySeconds: 3, periodSeconds: 10 }
+          livenessProbe: { tcpSocket: { port: mesh-in }, initialDelaySeconds: 10, periodSeconds: 20 }
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 250m, memory: 256Mi }
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1337
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - { name: sidecar-bootstrap, mountPath: /etc/envoy, readOnly: true }
+            - { name: spire-agent-socket, mountPath: /run/spire/sockets, readOnly: true }
+            - { name: envoy-tmp, mountPath: /tmp }
+      initContainers:
+        - name: mesh-iptables
+          image: registry.k8s.io/build-image/debian-iptables:bookworm-v1.0.0
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              # Inbound -> sidecar :15006, app egress -> sidecar :15001. Exclude
+              # the sidecar's own uid (1337), loopback, and the control plane
+              # (DNS 53, kube API 443, SPIRE 8081) so the SVID bootstrap path is
+              # never captured. Tighten 443 to the API server CIDR per cluster.
+              iptables -t nat -N SOV_OUT
+              iptables -t nat -A OUTPUT -p tcp -j SOV_OUT
+              iptables -t nat -A SOV_OUT -m owner --uid-owner 1337 -j RETURN
+              iptables -t nat -A SOV_OUT -o lo -j RETURN
+              iptables -t nat -A SOV_OUT -p tcp --dport 53 -j RETURN
+              iptables -t nat -A SOV_OUT -p tcp --dport 443 -j RETURN
+              iptables -t nat -A SOV_OUT -p tcp --dport 8081 -j RETURN
+              iptables -t nat -A SOV_OUT -p tcp -j REDIRECT --to-ports 15001
+              iptables -t nat -N SOV_IN
+              iptables -t nat -A PREROUTING -p tcp -j SOV_IN
+              iptables -t nat -A SOV_IN -p tcp --dport 15006 -j RETURN
+              iptables -t nat -A SOV_IN -p tcp --dport 15001 -j RETURN
+              iptables -t nat -A SOV_IN -p tcp -j REDIRECT --to-ports 15006
+          securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+            allowPrivilegeEscalation: false
+            capabilities: { add: [NET_ADMIN, NET_RAW], drop: [ALL] }
+            readOnlyRootFilesystem: true
+      volumes:
+        - name: sidecar-bootstrap
+          configMap: { name: sidecar-bootstrap-audit-service }
+        - name: spire-agent-socket
+          hostPath: { path: /run/spire/sockets, type: DirectoryOrCreate }
+        - name: envoy-tmp
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
@@ -301,6 +490,65 @@ spec:
             allowPrivilegeEscalation: false
             capabilities: { drop: [ALL] }
             readOnlyRootFilesystem: true
+        - name: envoy-sidecar
+          image: envoyproxy/envoy:v1.31.5
+          imagePullPolicy: IfNotPresent
+          args: ["-c", "/etc/envoy/envoy.yaml", "--service-cluster", "metering-service"]
+          ports:
+            - { name: mesh-in, containerPort: 15006 }
+            - { name: mesh-out, containerPort: 15001 }
+          readinessProbe: { tcpSocket: { port: mesh-in }, initialDelaySeconds: 3, periodSeconds: 10 }
+          livenessProbe: { tcpSocket: { port: mesh-in }, initialDelaySeconds: 10, periodSeconds: 20 }
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 250m, memory: 256Mi }
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1337
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - { name: sidecar-bootstrap, mountPath: /etc/envoy, readOnly: true }
+            - { name: spire-agent-socket, mountPath: /run/spire/sockets, readOnly: true }
+            - { name: envoy-tmp, mountPath: /tmp }
+      initContainers:
+        - name: mesh-iptables
+          image: registry.k8s.io/build-image/debian-iptables:bookworm-v1.0.0
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              # Inbound -> sidecar :15006, app egress -> sidecar :15001. Exclude
+              # the sidecar's own uid (1337), loopback, and the control plane
+              # (DNS 53, kube API 443, SPIRE 8081) so the SVID bootstrap path is
+              # never captured. Tighten 443 to the API server CIDR per cluster.
+              iptables -t nat -N SOV_OUT
+              iptables -t nat -A OUTPUT -p tcp -j SOV_OUT
+              iptables -t nat -A SOV_OUT -m owner --uid-owner 1337 -j RETURN
+              iptables -t nat -A SOV_OUT -o lo -j RETURN
+              iptables -t nat -A SOV_OUT -p tcp --dport 53 -j RETURN
+              iptables -t nat -A SOV_OUT -p tcp --dport 443 -j RETURN
+              iptables -t nat -A SOV_OUT -p tcp --dport 8081 -j RETURN
+              iptables -t nat -A SOV_OUT -p tcp -j REDIRECT --to-ports 15001
+              iptables -t nat -N SOV_IN
+              iptables -t nat -A PREROUTING -p tcp -j SOV_IN
+              iptables -t nat -A SOV_IN -p tcp --dport 15006 -j RETURN
+              iptables -t nat -A SOV_IN -p tcp --dport 15001 -j RETURN
+              iptables -t nat -A SOV_IN -p tcp -j REDIRECT --to-ports 15006
+          securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+            allowPrivilegeEscalation: false
+            capabilities: { add: [NET_ADMIN, NET_RAW], drop: [ALL] }
+            readOnlyRootFilesystem: true
+      volumes:
+        - name: sidecar-bootstrap
+          configMap: { name: sidecar-bootstrap-metering-service }
+        - name: spire-agent-socket
+          hostPath: { path: /run/spire/sockets, type: DirectoryOrCreate }
+        - name: envoy-tmp
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
