@@ -198,6 +198,20 @@ at a trusted mesh/front door and pass an allow-listed `X-SPIFFE-ID` or
 `WORKLOAD_IDENTITY_ENABLED=true` and comma-separate allowed identities in
 `ALLOWED_WORKLOAD_IDENTITIES`.
 
+`WORKLOAD_IDENTITY_ENABLED` trusts the identity header directly, which is
+only safe when the service is unreachable except through the mesh. The
+hardened posture sets **`MTLS_REQUIRED=true`** (default on for any non-dev
+`ENV`): the inbound side then trusts *only* the peer identity the mesh
+verified via mTLS and forwarded as `X-Forwarded-Client-Cert` (XFCC). Envoy
+sanitises any client-supplied XFCC, so the identity cannot be spoofed on a
+direct path; plain `X-SPIFFE-ID` / `X-Sovereign-Workload-Identity` headers
+are ignored in this posture. The SPIFFE id is read from the leaf cert's
+`URI` SAN and checked against `ALLOWED_WORKLOAD_IDENTITIES` (`*` allows any
+verified peer). A request with no valid XFCC is rejected `401`; a verified
+but un-allow-listed identity is rejected `403`. The mesh must be configured
+to forward XFCC (Envoy: `forward_client_cert_details: sanitize_set` with the
+`uri` SAN included).
+
 ## Errors
 
 Every service emits RFC 7807-style JSON problem detail on error:

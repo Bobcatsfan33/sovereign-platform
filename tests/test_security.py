@@ -181,3 +181,71 @@ def test_outbound_headers_accepted_by_inbound_locked_down(monkeypatch) -> None: 
     assert r.status_code == 200
     assert r.json()["identity"] == "spiffe://sovereign/broker"
     settings_module.get_settings.cache_clear()
+
+
+# ── E2 mesh mTLS: XFCC-verified inbound identity ───────────────────────
+
+
+def _enable_mtls(monkeypatch, allowed: str = "spiffe://sovereign/broker") -> None:  # type: ignore[no-untyped-def]
+    from sovereign import settings as settings_module
+
+    monkeypatch.setattr(settings_module.Settings, "mtls_required", True)
+    monkeypatch.setattr(settings_module.Settings, "allowed_workload_identities", allowed)
+    settings_module.get_settings.cache_clear()
+
+
+def test_mtls_valid_xfcc_identity_returns_200(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    _enable_mtls(monkeypatch)
+    client = TestClient(_app())
+    r = client.get(
+        "/protected",
+        headers={"X-Forwarded-Client-Cert": "Hash=abc;URI=spiffe://sovereign/broker"},
+    )
+    assert r.status_code == 200
+    assert r.json()["identity"] == "spiffe://sovereign/broker"
+
+
+def test_mtls_missing_xfcc_returns_401(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    _enable_mtls(monkeypatch)
+    client = TestClient(_app())
+    r = client.get("/protected", headers=AUTH_HEADER)  # bearer alone is not enough
+    assert r.status_code == 401
+    assert r.json()["detail"] == "mTLS client certificate required"
+
+
+def test_mtls_denied_xfcc_identity_returns_403(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    _enable_mtls(monkeypatch)
+    client = TestClient(_app())
+    r = client.get(
+        "/protected",
+        headers={"X-Forwarded-Client-Cert": "URI=spiffe://sovereign/intruder"},
+    )
+    assert r.status_code == 403
+    assert "not allowed" in r.json()["detail"]
+
+
+def test_mtls_ignores_spoofed_identity_header(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """A caller that sets X-SPIFFE-ID / X-Sovereign-Workload-Identity but
+    presents no mesh-verified XFCC must NOT be authenticated."""
+    _enable_mtls(monkeypatch)
+    client = TestClient(_app())
+    r = client.get(
+        "/protected",
+        headers={
+            "X-SPIFFE-ID": "spiffe://sovereign/broker",
+            "X-Sovereign-Workload-Identity": "spiffe://sovereign/broker",
+        },
+    )
+    assert r.status_code == 401
+    assert r.json()["detail"] == "mTLS client certificate required"
+
+
+def test_mtls_wildcard_allows_any_verified_identity(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    _enable_mtls(monkeypatch, allowed="*")
+    client = TestClient(_app())
+    r = client.get(
+        "/protected",
+        headers={"X-Forwarded-Client-Cert": "URI=spiffe://sovereign/metering"},
+    )
+    assert r.status_code == 200
+    assert r.json()["identity"] == "spiffe://sovereign/metering"

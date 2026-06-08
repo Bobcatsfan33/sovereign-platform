@@ -108,6 +108,10 @@ def _default_workload_identity_enabled(env: str) -> bool:
     return _requires_real_secrets(env)
 
 
+def _default_mtls_required(env: str) -> bool:
+    return _requires_real_secrets(env)
+
+
 def _default_require_audit_signing(env: str) -> bool:
     return _requires_real_secrets(env)
 
@@ -235,6 +239,16 @@ class Settings:
         default=_default_workload_identity_enabled(env),
     )
     allowed_workload_identities: str = os.getenv("ALLOWED_WORKLOAD_IDENTITIES", "")
+    # E2 mesh mTLS: when True, the inbound side trusts ONLY the peer identity
+    # the mesh verified via mTLS and forwarded as X-Forwarded-Client-Cert
+    # (XFCC). Plain X-Sovereign-Workload-Identity / X-SPIFFE-ID headers are
+    # NOT trusted in this posture because they are forgeable on a direct path.
+    # Defaults on for non-dev so a shared-environment deploy fails closed
+    # unless a mesh is actually terminating mTLS and injecting XFCC.
+    mtls_required: bool = _env_bool(
+        "MTLS_REQUIRED",
+        default=_default_mtls_required(env),
+    )
     # E2: the identity THIS service asserts on outbound service-to-service
     # calls (the inbound side verifies it against allowed_workload_identities).
     # Empty falls back to a SPIFFE-style id derived from service_name, so a
