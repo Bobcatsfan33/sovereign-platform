@@ -23,6 +23,53 @@ class RenderValidationError(ValueError):
     the Envoy v3 schema subset enforced by `validate_bootstrap`."""
 
 
+#: Where the mesh / deployment mounts this workload's TLS material. The
+#: renderer references it by convention rather than embedding secrets, so
+#: rotating certs is a deployment concern, not a re-render.
+_MESH_TLS_DIR = "/etc/sovereign/tls"
+
+
+def _downstream_tls_transport_socket() -> dict[str, Any]:
+    """A DownstreamTlsContext that terminates mTLS and REQUIRES a verified
+    client certificate. Without this, `mtls_enabled` was a no-op boolean and
+    the listener accepted plaintext. Cert material is mounted by the mesh at
+    `_MESH_TLS_DIR`; the validated peer identity is then forwarded upstream
+    as XFCC (see `_xfcc_hcm_fields`)."""
+    return {
+        "name": "envoy.transport_sockets.tls",
+        "typed_config": {
+            "@type": (
+                "type.googleapis.com/envoy.extensions.transport_sockets."
+                "tls.v3.DownstreamTlsContext"
+            ),
+            "require_client_certificate": True,
+            "common_tls_context": {
+                "tls_certificates": [
+                    {
+                        "certificate_chain": {"filename": f"{_MESH_TLS_DIR}/tls.crt"},
+                        "private_key": {"filename": f"{_MESH_TLS_DIR}/tls.key"},
+                    }
+                ],
+                "validation_context": {
+                    "trusted_ca": {"filename": f"{_MESH_TLS_DIR}/ca.crt"},
+                },
+            },
+        },
+    }
+
+
+def _xfcc_hcm_fields() -> dict[str, Any]:
+    """HttpConnectionManager fields that make Envoy emit the verified peer
+    identity as X-Forwarded-Client-Cert. `SANITIZE_SET` strips any client-
+    supplied XFCC and rewrites it from the mTLS-verified certificate (so it
+    cannot be spoofed on a direct path); `uri: true` includes the SPIFFE URI
+    SAN — exactly what the services' `require_bearer` dependency parses."""
+    return {
+        "forward_client_cert_details": "SANITIZE_SET",
+        "set_current_client_cert_details": {"uri": True},
+    }
+
+
 def _build_doc(instance: ServiceInstance) -> dict[str, Any]:
     params = instance.parameters
     listeners: list[dict[str, Any]] = []
@@ -32,43 +79,51 @@ def _build_doc(instance: ServiceInstance) -> dict[str, Any]:
             {"match": {"prefix": r.prefix}, "route": {"cluster": r.cluster}}
             for r in params.routes
         ] or [{"match": {"prefix": "/"}, "direct_response": {"status": 404}}]
+        hcm_typed_config: dict[str, Any] = {
+            "@type": "type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager",
+            "stat_prefix": f"{instance.instance_id}_{listener.name}",
+            "route_config": {
+                "name": f"{listener.name}_routes",
+                "virtual_hosts": [
+                    {
+                        "name": "service_routes",
+                        "domains": domains,
+                        "routes": routes,
+                    }
+                ],
+            },
+            # When mTLS terminates here, forward the verified peer identity
+            # upstream as XFCC so the sovereign services can authorize it.
+            **(_xfcc_hcm_fields() if params.mtls_enabled else {}),
+            "http_filters": [
+                {
+                    "name": "envoy.filters.http.router",
+                    "typed_config": {
+                        "@type": "type.googleapis.com/envoy.extensions.filters.http.router.v3.Router"
+                    },
+                }
+            ],
+        }
+        filter_chain: dict[str, Any] = {
+            "filters": [
+                {
+                    "name": "envoy.filters.network.http_connection_manager",
+                    "typed_config": hcm_typed_config,
+                }
+            ]
+        }
+        if params.mtls_enabled:
+            filter_chain = {
+                **filter_chain,
+                "transport_socket": _downstream_tls_transport_socket(),
+            }
         listeners.append(
             {
                 "name": listener.name,
                 "address": {
                     "socket_address": {"address": "0.0.0.0", "port_value": listener.port}
                 },
-                "filter_chains": [
-                    {
-                        "filters": [
-                            {
-                                "name": "envoy.filters.network.http_connection_manager",
-                                "typed_config": {
-                                    "@type": "type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager",
-                                    "stat_prefix": f"{instance.instance_id}_{listener.name}",
-                                    "route_config": {
-                                        "name": f"{listener.name}_routes",
-                                        "virtual_hosts": [
-                                            {
-                                                "name": "service_routes",
-                                                "domains": domains,
-                                                "routes": routes,
-                                            }
-                                        ],
-                                    },
-                                    "http_filters": [
-                                        {
-                                            "name": "envoy.filters.http.router",
-                                            "typed_config": {
-                                                "@type": "type.googleapis.com/envoy.extensions.filters.http.router.v3.Router"
-                                            },
-                                        }
-                                    ],
-                                },
-                            }
-                        ]
-                    }
-                ],
+                "filter_chains": [filter_chain],
             }
         )
 
