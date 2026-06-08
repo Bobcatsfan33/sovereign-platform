@@ -54,6 +54,7 @@ def test_production_logs_warning_for_dev_defaults_when_strict_disabled(
     monkeypatch.setattr(settings_module.Settings, "require_oidc", False)
     monkeypatch.setattr(settings_module.Settings, "require_managed_secrets", False)
     monkeypatch.setattr(settings_module.Settings, "require_audit_signing", False)
+    monkeypatch.setattr(settings_module.Settings, "broker_trust_basic_auth", False)
     settings_module.get_settings.cache_clear()
 
     caplog.set_level(logging.ERROR)
@@ -71,6 +72,54 @@ def test_basic_auth_rbac_bypass_defaults_off_in_production() -> None:
     assert settings_module._default_broker_trust_basic_auth("production") is False
     assert settings_module._default_broker_trust_basic_auth("prod") is False
     assert settings_module._default_broker_trust_basic_auth("dev") is True
+
+
+def test_production_refuses_basic_auth_rbac_bypass(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Defaulting off is not enough — an operator who overrides
+    BROKER_TRUST_BASIC_AUTH=true in a managed environment must be stopped at
+    startup, since the bypass skips RBAC for OSB/Basic callers."""
+    from sovereign import settings as settings_module
+
+    monkeypatch.setattr(settings_module.Settings, "env", "production")
+    monkeypatch.setattr(settings_module.Settings, "broker_trust_basic_auth", True)
+    settings_module.get_settings.cache_clear()
+
+    with pytest.raises(RuntimeError, match="Basic-auth RBAC bypass enabled"):
+        settings_module.get_settings()
+
+
+def test_production_starts_with_basic_auth_bypass_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With the bypass off and the other guardrails satisfied, the managed
+    gate lets the service start — proving the new check is scoped to the
+    bypass alone and does not block a correctly-configured deploy."""
+    from sovereign import settings as settings_module
+
+    monkeypatch.setattr(settings_module.Settings, "env", "production")
+    monkeypatch.setattr(settings_module.Settings, "broker_trust_basic_auth", False)
+    monkeypatch.setattr(settings_module.Settings, "strict_secrets", False)
+    monkeypatch.setattr(settings_module.Settings, "require_oidc", False)
+    monkeypatch.setattr(settings_module.Settings, "require_managed_secrets", False)
+    monkeypatch.setattr(settings_module.Settings, "require_audit_signing", False)
+    settings_module.get_settings.cache_clear()
+    try:
+        s = settings_module.get_settings()
+        assert s.env == "production"
+        assert s.broker_trust_basic_auth is False
+    finally:
+        settings_module.get_settings.cache_clear()
+
+
+def test_dev_allows_basic_auth_bypass() -> None:
+    """The gate is managed-env only; local dev keeps the OSB convenience."""
+    from sovereign import settings as settings_module
+
+    settings_module.get_settings.cache_clear()
+    try:
+        s = settings_module.get_settings()
+        assert s.env == "dev"
+        assert s.broker_trust_basic_auth is True
+    finally:
+        settings_module.get_settings.cache_clear()
 
 
 def test_strict_secrets_defaults_on_in_production() -> None:
@@ -231,6 +280,7 @@ def test_managed_provider_resolves_and_overrides_dev_defaults(
     monkeypatch.setattr(settings_module.Settings, "strict_secrets", True)
     monkeypatch.setattr(settings_module.Settings, "require_oidc", False)
     monkeypatch.setattr(settings_module.Settings, "require_audit_signing", False)
+    monkeypatch.setattr(settings_module.Settings, "broker_trust_basic_auth", False)
     reset_secrets_provider()
     set_secrets_provider(_FakeProvider(real))  # type: ignore[arg-type]
     settings_module.get_settings.cache_clear()

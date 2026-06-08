@@ -307,4 +307,15 @@ def get_settings() -> Settings:
                 f"refusing to start in a managed environment (ENV={s.env}) "
                 "without audit signing key material"
             )
+        # The OSB Basic-auth path bypasses RBAC entirely. That is a dev/back-
+        # compat convenience only; a managed environment must never run with
+        # it on, and there is no break-glass — unlike the dev-sentinel gate,
+        # this is an unconditional refusal because the bypass has no safe use
+        # in a shared deploy.
+        if s.broker_trust_basic_auth:
+            raise RuntimeError(
+                f"refusing to start in a managed environment (ENV={s.env}) "
+                "with the Basic-auth RBAC bypass enabled; set "
+                "BROKER_TRUST_BASIC_AUTH=false"
+            )
     return s
