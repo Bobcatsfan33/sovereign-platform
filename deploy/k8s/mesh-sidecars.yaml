@@ -1,0 +1,406 @@
+# Per-pod Envoy mesh sidecar bootstraps — GENERATED, do not hand-edit.
+#
+# Each ConfigMap is the exact output of
+# sovereign.render.render_sidecar_bootstrap(<service>, <app_port>) with
+# MESH_SDS_ENABLED=true and WORKLOAD_IDENTITY=spiffe://sovereign-platform/<service>.
+# tests/test_mesh_sidecar_wiring.py re-renders and asserts these match, so
+# regenerate (not hand-edit) when the renderer changes.
+#
+# ROLLOUT (two-phase, like Istio's permissive→strict):
+#   0. Deploy SPIRE first (spire.yaml). Pods that inject the sidecar go
+#      NotReady until the agent can issue SVIDs, so the agent must be healthy.
+#   1. INJECT (per backend Deployment in production.yaml): add an
+#      `envoy-sidecar` container that runs `envoy -c /etc/envoy/envoy.yaml`,
+#      mounting this ConfigMap at /etc/envoy and the SPIRE socket dir
+#      (hostPath /run/spire/sockets) read-only, hardened (drop ALL, no
+#      privilege escalation, tcpSocket readiness on the inbound port 15006),
+#      plus an emptyDir at /tmp for the admin log.
+#   2. INBOUND cutover: point each Service's targetPort at the sidecar's
+#      `mesh` port (15006). Peers then hit the sidecar, which terminates mTLS
+#      and forwards to the app on 127.0.0.1 with XFCC.
+#   3. OUTBOUND (the open decision): an app's egress is NOT yet mTLS. Either
+#      (a) add an iptables-redirect init container — needs NET_ADMIN, which
+#      conflicts with the current drop:[ALL] hardening — or (b) give the
+#      sidecar per-peer egress listeners and repoint each *_SERVICE_URL at
+#      127.0.0.1:<egress-port>. Until this lands, only do step 2 for services
+#      whose callers already present a client cert, or east-west breaks.
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sidecar-bootstrap-broker
+  namespace: sovereign-platform
+data:
+  envoy.yaml: |
+    static_resources:
+      listeners:
+      - name: inbound_mtls
+        address:
+          socket_address:
+            address: 0.0.0.0
+            port_value: 15006
+        filter_chains:
+        - transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              '@type': type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+              require_client_certificate: true
+              common_tls_context:
+                tls_certificate_sds_secret_configs:
+                - name: spiffe://sovereign-platform/broker
+                  sds_config:
+                    api_config_source:
+                      api_type: GRPC
+                      transport_api_version: V3
+                      grpc_services:
+                      - envoy_grpc:
+                          cluster_name: spiffe_sds
+                validation_context_sds_secret_config:
+                  name: spiffe://sovereign-platform
+                  sds_config:
+                    api_config_source:
+                      api_type: GRPC
+                      transport_api_version: V3
+                      grpc_services:
+                      - envoy_grpc:
+                          cluster_name: spiffe_sds
+          filters:
+          - name: envoy.filters.network.http_connection_manager
+            typed_config:
+              '@type': type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+              stat_prefix: broker_inbound
+              route_config:
+                name: inbound_routes
+                virtual_hosts:
+                - name: local_app
+                  domains:
+                  - '*'
+                  routes:
+                  - match:
+                      prefix: /
+                    route:
+                      cluster: local_app
+              forward_client_cert_details: SANITIZE_SET
+              set_current_client_cert_details:
+                uri: true
+              http_filters:
+              - name: envoy.filters.http.router
+                typed_config:
+                  '@type': type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+      clusters:
+      - name: local_app
+        connect_timeout: 2s
+        type: STATIC
+        load_assignment:
+          cluster_name: local_app
+          endpoints:
+          - lb_endpoints:
+            - endpoint:
+                address:
+                  socket_address:
+                    address: 127.0.0.1
+                    port_value: 8080
+      - name: spiffe_sds
+        type: STATIC
+        connect_timeout: 1s
+        http2_protocol_options: {}
+        load_assignment:
+          cluster_name: spiffe_sds
+          endpoints:
+          - lb_endpoints:
+            - endpoint:
+                address:
+                  pipe:
+                    path: /run/spire/sockets/agent.sock
+    admin:
+      access_log_path: /tmp/admin_access.log
+      address:
+        socket_address:
+          address: 127.0.0.1
+          port_value: 9901
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sidecar-bootstrap-control-plane
+  namespace: sovereign-platform
+data:
+  envoy.yaml: |
+    static_resources:
+      listeners:
+      - name: inbound_mtls
+        address:
+          socket_address:
+            address: 0.0.0.0
+            port_value: 15006
+        filter_chains:
+        - transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              '@type': type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+              require_client_certificate: true
+              common_tls_context:
+                tls_certificate_sds_secret_configs:
+                - name: spiffe://sovereign-platform/control-plane
+                  sds_config:
+                    api_config_source:
+                      api_type: GRPC
+                      transport_api_version: V3
+                      grpc_services:
+                      - envoy_grpc:
+                          cluster_name: spiffe_sds
+                validation_context_sds_secret_config:
+                  name: spiffe://sovereign-platform
+                  sds_config:
+                    api_config_source:
+                      api_type: GRPC
+                      transport_api_version: V3
+                      grpc_services:
+                      - envoy_grpc:
+                          cluster_name: spiffe_sds
+          filters:
+          - name: envoy.filters.network.http_connection_manager
+            typed_config:
+              '@type': type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+              stat_prefix: control-plane_inbound
+              route_config:
+                name: inbound_routes
+                virtual_hosts:
+                - name: local_app
+                  domains:
+                  - '*'
+                  routes:
+                  - match:
+                      prefix: /
+                    route:
+                      cluster: local_app
+              forward_client_cert_details: SANITIZE_SET
+              set_current_client_cert_details:
+                uri: true
+              http_filters:
+              - name: envoy.filters.http.router
+                typed_config:
+                  '@type': type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+      clusters:
+      - name: local_app
+        connect_timeout: 2s
+        type: STATIC
+        load_assignment:
+          cluster_name: local_app
+          endpoints:
+          - lb_endpoints:
+            - endpoint:
+                address:
+                  socket_address:
+                    address: 127.0.0.1
+                    port_value: 8090
+      - name: spiffe_sds
+        type: STATIC
+        connect_timeout: 1s
+        http2_protocol_options: {}
+        load_assignment:
+          cluster_name: spiffe_sds
+          endpoints:
+          - lb_endpoints:
+            - endpoint:
+                address:
+                  pipe:
+                    path: /run/spire/sockets/agent.sock
+    admin:
+      access_log_path: /tmp/admin_access.log
+      address:
+        socket_address:
+          address: 127.0.0.1
+          port_value: 9901
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sidecar-bootstrap-audit-service
+  namespace: sovereign-platform
+data:
+  envoy.yaml: |
+    static_resources:
+      listeners:
+      - name: inbound_mtls
+        address:
+          socket_address:
+            address: 0.0.0.0
+            port_value: 15006
+        filter_chains:
+        - transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              '@type': type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+              require_client_certificate: true
+              common_tls_context:
+                tls_certificate_sds_secret_configs:
+                - name: spiffe://sovereign-platform/audit-service
+                  sds_config:
+                    api_config_source:
+                      api_type: GRPC
+                      transport_api_version: V3
+                      grpc_services:
+                      - envoy_grpc:
+                          cluster_name: spiffe_sds
+                validation_context_sds_secret_config:
+                  name: spiffe://sovereign-platform
+                  sds_config:
+                    api_config_source:
+                      api_type: GRPC
+                      transport_api_version: V3
+                      grpc_services:
+                      - envoy_grpc:
+                          cluster_name: spiffe_sds
+          filters:
+          - name: envoy.filters.network.http_connection_manager
+            typed_config:
+              '@type': type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+              stat_prefix: audit-service_inbound
+              route_config:
+                name: inbound_routes
+                virtual_hosts:
+                - name: local_app
+                  domains:
+                  - '*'
+                  routes:
+                  - match:
+                      prefix: /
+                    route:
+                      cluster: local_app
+              forward_client_cert_details: SANITIZE_SET
+              set_current_client_cert_details:
+                uri: true
+              http_filters:
+              - name: envoy.filters.http.router
+                typed_config:
+                  '@type': type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+      clusters:
+      - name: local_app
+        connect_timeout: 2s
+        type: STATIC
+        load_assignment:
+          cluster_name: local_app
+          endpoints:
+          - lb_endpoints:
+            - endpoint:
+                address:
+                  socket_address:
+                    address: 127.0.0.1
+                    port_value: 8086
+      - name: spiffe_sds
+        type: STATIC
+        connect_timeout: 1s
+        http2_protocol_options: {}
+        load_assignment:
+          cluster_name: spiffe_sds
+          endpoints:
+          - lb_endpoints:
+            - endpoint:
+                address:
+                  pipe:
+                    path: /run/spire/sockets/agent.sock
+    admin:
+      access_log_path: /tmp/admin_access.log
+      address:
+        socket_address:
+          address: 127.0.0.1
+          port_value: 9901
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sidecar-bootstrap-metering-service
+  namespace: sovereign-platform
+data:
+  envoy.yaml: |
+    static_resources:
+      listeners:
+      - name: inbound_mtls
+        address:
+          socket_address:
+            address: 0.0.0.0
+            port_value: 15006
+        filter_chains:
+        - transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              '@type': type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+              require_client_certificate: true
+              common_tls_context:
+                tls_certificate_sds_secret_configs:
+                - name: spiffe://sovereign-platform/metering-service
+                  sds_config:
+                    api_config_source:
+                      api_type: GRPC
+                      transport_api_version: V3
+                      grpc_services:
+                      - envoy_grpc:
+                          cluster_name: spiffe_sds
+                validation_context_sds_secret_config:
+                  name: spiffe://sovereign-platform
+                  sds_config:
+                    api_config_source:
+                      api_type: GRPC
+                      transport_api_version: V3
+                      grpc_services:
+                      - envoy_grpc:
+                          cluster_name: spiffe_sds
+          filters:
+          - name: envoy.filters.network.http_connection_manager
+            typed_config:
+              '@type': type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+              stat_prefix: metering-service_inbound
+              route_config:
+                name: inbound_routes
+                virtual_hosts:
+                - name: local_app
+                  domains:
+                  - '*'
+                  routes:
+                  - match:
+                      prefix: /
+                    route:
+                      cluster: local_app
+              forward_client_cert_details: SANITIZE_SET
+              set_current_client_cert_details:
+                uri: true
+              http_filters:
+              - name: envoy.filters.http.router
+                typed_config:
+                  '@type': type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+      clusters:
+      - name: local_app
+        connect_timeout: 2s
+        type: STATIC
+        load_assignment:
+          cluster_name: local_app
+          endpoints:
+          - lb_endpoints:
+            - endpoint:
+                address:
+                  socket_address:
+                    address: 127.0.0.1
+                    port_value: 8087
+      - name: spiffe_sds
+        type: STATIC
+        connect_timeout: 1s
+        http2_protocol_options: {}
+        load_assignment:
+          cluster_name: spiffe_sds
+          endpoints:
+          - lb_endpoints:
+            - endpoint:
+                address:
+                  pipe:
+                    path: /run/spire/sockets/agent.sock
+    admin:
+      access_log_path: /tmp/admin_access.log
+      address:
+        socket_address:
+          address: 127.0.0.1
+          port_value: 9901
