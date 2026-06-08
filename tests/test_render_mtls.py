@@ -10,8 +10,9 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
 from sovereign.models import ProvisionRequest, ServiceInstance
-from sovereign.render import _MESH_TLS_DIR, _build_doc, render_envoy
+from sovereign.render import _MESH_TLS_DIR, _SDS_CLUSTER_NAME, _build_doc, render_envoy
 
 
 def _instance(*, mtls: bool) -> ServiceInstance:
@@ -102,3 +103,77 @@ def test_xfcc_forwarding_feeds_require_bearer() -> None:
     # inbound dependency parses back into the peer identity.
     sample = "Hash=abc;URI=spiffe://sovereign/broker"
     assert parse_xfcc_identity(sample) == "spiffe://sovereign/broker"
+
+
+# ── E3: SDS / SPIRE cert delivery ──────────────────────────────────────
+
+
+def _enable_sds(monkeypatch: pytest.MonkeyPatch, *, service_name: str = "broker") -> None:
+    from sovereign import settings as settings_module
+
+    monkeypatch.setattr(settings_module.Settings, "mesh_sds_enabled", True)
+    monkeypatch.setattr(settings_module.Settings, "service_name", service_name)
+    settings_module.get_settings.cache_clear()
+
+
+def test_file_mode_is_default_when_sds_disabled() -> None:
+    """Without SDS, the TLS context uses static mounted files and no SDS
+    cluster is added."""
+    doc = _build_doc(_instance(mtls=True))
+    common = _filter_chain(doc)["transport_socket"]["typed_config"]["common_tls_context"]
+    assert "tls_certificates" in common
+    assert "tls_certificate_sds_secret_configs" not in common
+    assert all(c["name"] != _SDS_CLUSTER_NAME for c in doc["static_resources"]["clusters"])
+
+
+def test_sds_mode_delivers_svid_and_bundle_over_spire(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With SDS enabled, both directions fetch the SVID (under this workload's
+    SPIFFE id) and the trust bundle (under the trust-domain id) from SPIRE,
+    and a single spiffe_sds cluster reaches the agent socket over a UDS."""
+    from sovereign import settings as settings_module
+
+    _enable_sds(monkeypatch, service_name="broker")
+    try:
+        doc = _build_doc(_instance(mtls=True))
+        for socket_tc in (
+            _filter_chain(doc)["transport_socket"]["typed_config"],
+            _cluster(doc)["transport_socket"]["typed_config"],
+        ):
+            common = socket_tc["common_tls_context"]
+            assert "tls_certificates" not in common
+            svid = common["tls_certificate_sds_secret_configs"][0]
+            assert svid["name"] == "spiffe://sovereign/broker"
+            assert (
+                svid["sds_config"]["api_config_source"]["grpc_services"][0][
+                    "envoy_grpc"
+                ]["cluster_name"]
+                == _SDS_CLUSTER_NAME
+            )
+            assert (
+                common["validation_context_sds_secret_config"]["name"]
+                == "spiffe://sovereign"
+            )
+        sds_clusters = [
+            c for c in doc["static_resources"]["clusters"] if c["name"] == _SDS_CLUSTER_NAME
+        ]
+        assert len(sds_clusters) == 1
+        ep = sds_clusters[0]["load_assignment"]["endpoints"][0]["lb_endpoints"][0]
+        assert ep["endpoint"]["address"]["pipe"]["path"] == "/run/spire/sockets/agent.sock"
+    finally:
+        settings_module.get_settings.cache_clear()
+
+
+def test_sds_doc_passes_schema_validation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The SDS additions (incl. the UDS pipe address) must satisfy
+    validate_bootstrap and survive YAML serialisation."""
+    from sovereign import settings as settings_module
+
+    _enable_sds(monkeypatch)
+    try:
+        rendered = render_envoy(_instance(mtls=True))
+        assert "tls_certificate_sds_secret_configs" in rendered
+        assert "/run/spire/sockets/agent.sock" in rendered
+    finally:
+        settings_module.get_settings.cache_clear()

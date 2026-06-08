@@ -262,6 +262,25 @@ class Settings:
         from the service name."""
         return self.workload_identity or f"spiffe://sovereign/{self.service_name}"
 
+    # E3 mesh: when enabled, the rendered Envoy mTLS contexts fetch their
+    # SVID and trust bundle dynamically over the SPIRE agent's SDS socket
+    # instead of reading static files from _MESH_TLS_DIR. This is what makes
+    # certs short-lived and auto-rotated. Opt-in (default off) because it
+    # requires SPIRE to be deployed and the agent socket mounted; the static-
+    # file path stays the default for dev and non-SPIRE deployments.
+    mesh_sds_enabled: bool = _env_bool("MESH_SDS_ENABLED", default=False)
+    mesh_sds_socket_path: str = os.getenv(
+        "MESH_SDS_SOCKET_PATH", "/run/spire/sockets/agent.sock"
+    )
+
+    def mesh_trust_domain(self) -> str:
+        """SPIFFE trust domain, parsed from the asserted identity
+        (spiffe://<trust-domain>/...). Falls back to 'sovereign'."""
+        identity = self.asserted_workload_identity()
+        if identity.startswith("spiffe://"):
+            return identity.removeprefix("spiffe://").split("/", 1)[0] or "sovereign"
+        return "sovereign"
+
     # CORS allow-list for browser-facing services (broker + audit). Comma-
     # separated origin URLs; empty allows the dev defaults below only.
     # Production sets this to the portal's deployed origin(s).

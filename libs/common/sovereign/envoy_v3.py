@@ -35,8 +35,22 @@ class SocketAddress(_EnvoyModel):
     protocol: Literal["TCP", "UDP"] | None = None
 
 
+class PipeAddress(_EnvoyModel):
+    """A Unix-domain-socket address. Used for the SPIRE agent SDS endpoint
+    (`/run/spire/sockets/agent.sock`)."""
+    path: str
+
+
 class Address(_EnvoyModel):
-    socket_address: SocketAddress
+    socket_address: SocketAddress | None = None
+    pipe: PipeAddress | None = None
+
+    @model_validator(mode="after")
+    def _exactly_one_address(self) -> Address:
+        # Envoy's Address is a oneof — exactly one concrete address kind.
+        if (self.socket_address is None) == (self.pipe is None):
+            raise ValueError("address needs exactly one of 'socket_address' or 'pipe'")
+        return self
 
 
 class EndpointHost(_EnvoyModel):

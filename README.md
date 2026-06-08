@@ -224,6 +224,15 @@ plaintext hop. TLS material is mounted by the deployment at `/etc/sovereign/tls`
 (`tls.crt` / `tls.key` / `ca.crt`), so cert rotation is a deployment concern,
 not a re-render.
 
+For short-lived, auto-rotated identities, set `MESH_SDS_ENABLED=true`: the
+rendered TLS contexts then fetch the SVID and trust bundle over **SDS** from
+the SPIRE agent socket (`MESH_SDS_SOCKET_PATH`, default
+`/run/spire/sockets/agent.sock`) instead of static files — the SVID under this
+workload's SPIFFE id and the bundle under the trust-domain id — and a single
+`spiffe_sds` gRPC cluster (over the agent's Unix socket) is added to the
+bootstrap. Certs then rotate without a re-render or pod restart. The static-
+file path remains the default for dev and non-SPIRE deployments.
+
 ## Errors
 
 Every service emits RFC 7807-style JSON problem detail on error:
