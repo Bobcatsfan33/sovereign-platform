@@ -217,9 +217,12 @@ a `sovereign-envoy-lb` instance with `mtls_enabled: true` now renders a
 listener that terminates mTLS (`DownstreamTlsContext`, `require_client_certificate`)
 and forwards the verified peer identity as XFCC (`SANITIZE_SET` +
 `set_current_client_cert_details: { uri: true }`) — so the rendered LB/sidecar
-is the producer of the XFCC the services above consume. TLS material is mounted
-by the deployment at `/etc/sovereign/tls` (`tls.crt` / `tls.key` / `ca.crt`),
-so cert rotation is a deployment concern, not a re-render.
+is the producer of the XFCC the services above consume. The clusters in the
+same instance originate mTLS to their backends (`UpstreamTlsContext`), so the
+data plane is mutually authenticated in **both** directions and leaves no
+plaintext hop. TLS material is mounted by the deployment at `/etc/sovereign/tls`
+(`tls.crt` / `tls.key` / `ca.crt`), so cert rotation is a deployment concern,
+not a re-render.
 
 ## Errors
 

@@ -29,12 +29,29 @@ class RenderValidationError(ValueError):
 _MESH_TLS_DIR = "/etc/sovereign/tls"
 
 
+def _common_tls_context() -> dict[str, Any]:
+    """The shared CommonTlsContext both directions use: this workload's own
+    cert/key (presented to peers) plus the CA bundle that verifies the other
+    side. All three files are mounted by the mesh at `_MESH_TLS_DIR`, so cert
+    rotation is a deployment concern rather than a re-render."""
+    return {
+        "tls_certificates": [
+            {
+                "certificate_chain": {"filename": f"{_MESH_TLS_DIR}/tls.crt"},
+                "private_key": {"filename": f"{_MESH_TLS_DIR}/tls.key"},
+            }
+        ],
+        "validation_context": {
+            "trusted_ca": {"filename": f"{_MESH_TLS_DIR}/ca.crt"},
+        },
+    }
+
+
 def _downstream_tls_transport_socket() -> dict[str, Any]:
     """A DownstreamTlsContext that terminates mTLS and REQUIRES a verified
     client certificate. Without this, `mtls_enabled` was a no-op boolean and
-    the listener accepted plaintext. Cert material is mounted by the mesh at
-    `_MESH_TLS_DIR`; the validated peer identity is then forwarded upstream
-    as XFCC (see `_xfcc_hcm_fields`)."""
+    the listener accepted plaintext. The validated peer identity is then
+    forwarded upstream as XFCC (see `_xfcc_hcm_fields`)."""
     return {
         "name": "envoy.transport_sockets.tls",
         "typed_config": {
@@ -43,17 +60,25 @@ def _downstream_tls_transport_socket() -> dict[str, Any]:
                 "tls.v3.DownstreamTlsContext"
             ),
             "require_client_certificate": True,
-            "common_tls_context": {
-                "tls_certificates": [
-                    {
-                        "certificate_chain": {"filename": f"{_MESH_TLS_DIR}/tls.crt"},
-                        "private_key": {"filename": f"{_MESH_TLS_DIR}/tls.key"},
-                    }
-                ],
-                "validation_context": {
-                    "trusted_ca": {"filename": f"{_MESH_TLS_DIR}/ca.crt"},
-                },
-            },
+            "common_tls_context": _common_tls_context(),
+        },
+    }
+
+
+def _upstream_tls_transport_socket() -> dict[str, Any]:
+    """An UpstreamTlsContext so the cluster ORIGINATES mTLS to its backends —
+    presenting this workload's client cert and validating the upstream's
+    server cert against the mesh CA. The mirror of the downstream socket:
+    with both in place, east-west traffic is mutually authenticated in both
+    directions, leaving no plaintext hop when `mtls_enabled` is set."""
+    return {
+        "name": "envoy.transport_sockets.tls",
+        "typed_config": {
+            "@type": (
+                "type.googleapis.com/envoy.extensions.transport_sockets."
+                "tls.v3.UpstreamTlsContext"
+            ),
+            "common_tls_context": _common_tls_context(),
         },
     }
 
@@ -129,33 +154,37 @@ def _build_doc(instance: ServiceInstance) -> dict[str, Any]:
 
     clusters: list[dict[str, Any]] = []
     for cluster in params.clusters:
-        clusters.append(
-            {
-                "name": cluster.name,
-                "connect_timeout": "2s",
-                "type": "STRICT_DNS",
-                "load_assignment": {
-                    "cluster_name": cluster.name,
-                    "endpoints": [
-                        {
-                            "lb_endpoints": [
-                                {
-                                    "endpoint": {
-                                        "address": {
-                                            "socket_address": {
-                                                "address": ep.split(":")[0],
-                                                "port_value": int(ep.split(":")[1]),
-                                            }
+        cluster_doc: dict[str, Any] = {
+            "name": cluster.name,
+            "connect_timeout": "2s",
+            "type": "STRICT_DNS",
+            "load_assignment": {
+                "cluster_name": cluster.name,
+                "endpoints": [
+                    {
+                        "lb_endpoints": [
+                            {
+                                "endpoint": {
+                                    "address": {
+                                        "socket_address": {
+                                            "address": ep.split(":")[0],
+                                            "port_value": int(ep.split(":")[1]),
                                         }
                                     }
                                 }
-                                for ep in cluster.endpoints
-                            ]
-                        }
-                    ],
-                },
+                            }
+                            for ep in cluster.endpoints
+                        ]
+                    }
+                ],
+            },
+        }
+        if params.mtls_enabled:
+            cluster_doc = {
+                **cluster_doc,
+                "transport_socket": _upstream_tls_transport_socket(),
             }
-        )
+        clusters.append(cluster_doc)
 
     return {
         "static_resources": {"listeners": listeners, "clusters": clusters},
