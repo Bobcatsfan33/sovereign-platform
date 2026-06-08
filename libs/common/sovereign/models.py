@@ -56,6 +56,9 @@ class LbParameters(BaseModel):
     tags: dict[str, str] = Field(default_factory=dict)
 
 class ServiceInstance(BaseModel):
+    # Persisted-payload schema version (see migrations.py). Tracks
+    # CURRENT_SCHEMA_VERSIONS["instance"]; bump both together with a migration.
+    schema_version: int = 1
     instance_id: str
     service_id: str
     plan_id: str
@@ -78,6 +81,9 @@ class ServiceInstance(BaseModel):
     updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 class Binding(BaseModel):
+    # Persisted-payload schema version (see migrations.py). Tracks
+    # CURRENT_SCHEMA_VERSIONS["binding"]; bump both together with a migration.
+    schema_version: int = 1
     binding_id: str
     instance_id: str
     app_guid: str | None = None

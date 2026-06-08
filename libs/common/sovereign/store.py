@@ -5,6 +5,7 @@ import boto3
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
+from .migrations import migrate_payload
 from .models import Binding, ServiceInstance
 from .settings import get_settings
 
@@ -61,7 +62,11 @@ class Store:
         try:
             r = self.instances.get_item(Key={"instance_id": instance_id})
             item = r.get("Item")
-            return ServiceInstance.model_validate(json.loads(item["payload"])) if item else None
+            if not item:
+                return None
+            return ServiceInstance.model_validate(
+                migrate_payload(json.loads(item["payload"]), kind="instance")
+            )
         except ClientError:
             return None
 
@@ -109,7 +114,9 @@ class Store:
             payload = row.get("payload")
             if not isinstance(payload, str | bytes | bytearray):
                 continue
-            inst = ServiceInstance.model_validate(json.loads(payload))
+            inst = ServiceInstance.model_validate(
+                migrate_payload(json.loads(payload), kind="instance")
+            )
             if organization_guid is not None and inst.organization_guid != organization_guid:
                 continue
             items.append(inst)
@@ -158,7 +165,11 @@ class Store:
     def get_binding(self, binding_id: str) -> Binding | None:
         r = self.bindings.get_item(Key={"binding_id": binding_id})
         item = r.get("Item")
-        return Binding.model_validate(json.loads(item["payload"])) if item else None
+        if not item:
+            return None
+        return Binding.model_validate(
+            migrate_payload(json.loads(item["payload"]), kind="binding")
+        )
 
     def delete_binding(self, binding_id: str):
         self.bindings.delete_item(Key={"binding_id": binding_id})
