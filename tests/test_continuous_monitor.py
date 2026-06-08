@@ -219,7 +219,7 @@ def test_settings_sentinels_gates_unrecognised_env() -> None:
     get_settings.cache_clear()
     with patch.object(Settings, "env", "staging"), patch.object(
         Settings, "dev_bearer_token", "dev-token"
-    ):
+    ), patch.object(Settings, "broker_trust_basic_auth", False):
         result = monitor.check_settings_sentinels()
     assert result.status == "FAIL"
     assert "staging" in result.detail
@@ -232,7 +232,7 @@ def test_settings_sentinels_fail_when_dev_token_active_in_prod() -> None:
     get_settings.cache_clear()
     with patch.object(Settings, "env", "production"), patch.object(
         Settings, "dev_bearer_token", "dev-token"
-    ):
+    ), patch.object(Settings, "broker_trust_basic_auth", False):
         result = monitor.check_settings_sentinels()
     assert result.status == "FAIL"
     assert "dev_bearer_token" in result.detail
@@ -247,7 +247,9 @@ def test_settings_sentinels_pass_when_real_secrets_injected() -> None:
         Settings, "dev_bearer_token", "real-token"
     ), patch.object(Settings, "broker_password", "real-pass"), patch.object(
         Settings, "s3_secret_key", "real-key"
-    ), patch.object(Settings, "dev_jwt_secret", "real-secret"):
+    ), patch.object(Settings, "dev_jwt_secret", "real-secret"), patch.object(
+        Settings, "broker_trust_basic_auth", False
+    ):
         result = monitor.check_settings_sentinels()
     assert result.status == "PASS"
 
