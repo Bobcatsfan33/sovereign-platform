@@ -16,6 +16,7 @@ from pydantic import ValidationError
 
 from .envoy_v3 import validate_bootstrap
 from .models import ServiceInstance
+from .settings import Settings, get_settings
 
 
 class RenderValidationError(ValueError):
@@ -23,17 +24,20 @@ class RenderValidationError(ValueError):
     the Envoy v3 schema subset enforced by `validate_bootstrap`."""
 
 
-#: Where the mesh / deployment mounts this workload's TLS material. The
-#: renderer references it by convention rather than embedding secrets, so
-#: rotating certs is a deployment concern, not a re-render.
+#: Where the mesh / deployment mounts this workload's TLS material when SDS
+#: is NOT used. The renderer references it by convention rather than embedding
+#: secrets, so rotating certs is a deployment concern, not a re-render.
 _MESH_TLS_DIR = "/etc/sovereign/tls"
 
+#: Name of the synthetic cluster that points Envoy at the SPIRE agent's SDS
+#: socket. Referenced by every SDS secret config and added to the bootstrap
+#: once when SDS is enabled.
+_SDS_CLUSTER_NAME = "spiffe_sds"
 
-def _common_tls_context() -> dict[str, Any]:
-    """The shared CommonTlsContext both directions use: this workload's own
-    cert/key (presented to peers) plus the CA bundle that verifies the other
-    side. All three files are mounted by the mesh at `_MESH_TLS_DIR`, so cert
-    rotation is a deployment concern rather than a re-render."""
+
+def _file_common_tls_context() -> dict[str, Any]:
+    """Static-file CommonTlsContext: this workload's own cert/key plus the CA
+    bundle, all mounted by the deployment at `_MESH_TLS_DIR`."""
     return {
         "tls_certificates": [
             {
@@ -43,6 +47,71 @@ def _common_tls_context() -> dict[str, Any]:
         ],
         "validation_context": {
             "trusted_ca": {"filename": f"{_MESH_TLS_DIR}/ca.crt"},
+        },
+    }
+
+
+def _sds_config() -> dict[str, Any]:
+    """An SdsSecretConfig `sds_config` that fetches secrets over gRPC from the
+    SPIRE agent (the `_SDS_CLUSTER_NAME` cluster, a UDS to the agent socket)."""
+    return {
+        "api_config_source": {
+            "api_type": "GRPC",
+            "transport_api_version": "V3",
+            "grpc_services": [{"envoy_grpc": {"cluster_name": _SDS_CLUSTER_NAME}}],
+        }
+    }
+
+
+def _sds_common_tls_context(s: Settings) -> dict[str, Any]:
+    """SDS CommonTlsContext: the SVID is delivered by SPIRE under this
+    workload's SPIFFE id, and the trust bundle under the trust-domain id.
+    Both are fetched live over the agent socket, so they auto-rotate without
+    a re-render or a pod restart."""
+    return {
+        "tls_certificate_sds_secret_configs": [
+            {"name": s.asserted_workload_identity(), "sds_config": _sds_config()}
+        ],
+        "validation_context_sds_secret_config": {
+            "name": f"spiffe://{s.mesh_trust_domain()}",
+            "sds_config": _sds_config(),
+        },
+    }
+
+
+def _common_tls_context() -> dict[str, Any]:
+    """The shared CommonTlsContext both directions use. Switches between
+    SPIRE SDS (short-lived, auto-rotated SVIDs) and static mounted files
+    based on `MESH_SDS_ENABLED`."""
+    s = get_settings()
+    if s.mesh_sds_enabled:
+        return _sds_common_tls_context(s)
+    return _file_common_tls_context()
+
+
+def _sds_cluster() -> dict[str, Any]:
+    """The synthetic gRPC cluster that reaches the SPIRE agent's SDS API over
+    its Unix socket. Added to the bootstrap once when SDS is enabled so every
+    TLS context's `sds_config` can resolve `_SDS_CLUSTER_NAME`."""
+    s = get_settings()
+    return {
+        "name": _SDS_CLUSTER_NAME,
+        "type": "STATIC",
+        "connect_timeout": "1s",
+        "http2_protocol_options": {},
+        "load_assignment": {
+            "cluster_name": _SDS_CLUSTER_NAME,
+            "endpoints": [
+                {
+                    "lb_endpoints": [
+                        {
+                            "endpoint": {
+                                "address": {"pipe": {"path": s.mesh_sds_socket_path}}
+                            }
+                        }
+                    ]
+                }
+            ],
         },
     }
 
@@ -185,6 +254,11 @@ def _build_doc(instance: ServiceInstance) -> dict[str, Any]:
                 "transport_socket": _upstream_tls_transport_socket(),
             }
         clusters.append(cluster_doc)
+
+    # When mTLS resolves its certs over SDS, every TLS context references the
+    # SPIRE-agent cluster — add it once so those sds_configs resolve.
+    if params.mtls_enabled and get_settings().mesh_sds_enabled:
+        clusters.append(_sds_cluster())
 
     return {
         "static_resources": {"listeners": listeners, "clusters": clusters},
