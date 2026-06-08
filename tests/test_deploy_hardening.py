@@ -89,6 +89,55 @@ def test_cosign_admission_policy_exists() -> None:
     assert verify["attestations"][0]["type"] == "https://slsa.dev/provenance/v1"
 
 
+def test_spire_control_plane_manifest_present() -> None:
+    """SPIRE server (StatefulSet) + agent (DaemonSet) exist with the platform
+    trust domain, and the agent serves the Workload API on the socket path
+    the renderer's MESH_SDS_SOCKET_PATH default points at."""
+    from sovereign.settings import Settings
+
+    docs = _k8s_docs()
+    kinds = {(d.get("kind"), d.get("metadata", {}).get("name")) for d in docs}
+    assert ("StatefulSet", "spire-server") in kinds
+    assert ("DaemonSet", "spire-agent") in kinds
+
+    cfgs = {d["metadata"]["name"]: d for d in docs if d.get("kind") == "ConfigMap"}
+    server_conf = cfgs["spire-server"]["data"]["server.conf"]
+    agent_conf = cfgs["spire-agent"]["data"]["agent.conf"]
+    assert 'trust_domain = "sovereign-platform"' in server_conf
+    assert 'trust_domain = "sovereign-platform"' in agent_conf
+
+    socket_default = Settings.mesh_sds_socket_path
+    assert f'socket_path = "{socket_default}"' in agent_conf
+
+    # The agent must expose that socket dir on the host for workloads to mount.
+    agent_ds = next(
+        d for d in docs if d.get("kind") == "DaemonSet" and d["metadata"]["name"] == "spire-agent"
+    )
+    host_paths = [
+        v["hostPath"]["path"]
+        for v in agent_ds["spec"]["template"]["spec"]["volumes"]
+        if "hostPath" in v
+    ]
+    assert "/run/spire/sockets" in host_paths
+
+
+def test_spire_registration_covers_chassis_services() -> None:
+    import json
+
+    docs = _k8s_docs()
+    cfgs = {d["metadata"]["name"]: d for d in docs if d.get("kind") == "ConfigMap"}
+    entries = json.loads(cfgs["spire-registration-entries"]["data"]["entries.json"])["entries"]
+    ids = {e["spiffe_id"] for e in entries}
+    assert {
+        "spiffe://sovereign-platform/broker",
+        "spiffe://sovereign-platform/control-plane",
+        "spiffe://sovereign-platform/audit-service",
+        "spiffe://sovereign-platform/metering-service",
+    }.issubset(ids)
+    for entry in entries:
+        assert "k8s:ns:sovereign-platform" in entry["selectors"]
+
+
 def test_terraform_hardening_controls_present() -> None:
     terraform = "\n".join(
         p.read_text() for p in sorted((ROOT / "infra" / "terraform").rglob("*.tf"))

@@ -1,0 +1,300 @@
+# SPIRE control plane for the sovereign-platform mesh.
+#
+# Provides the SDS source that `MESH_SDS_ENABLED=true` renders against: the
+# agent exposes the Workload API on a host socket at /run/spire/sockets/
+# agent.sock, and Envoy (in each workload pod, mounting that socket) fetches
+# its SVID + trust bundle over SDS. Trust domain is `sovereign-platform`, so
+# issued SVIDs are spiffe://sovereign-platform/<service> — matching
+# ALLOWED_WORKLOAD_IDENTITIES in production.yaml.
+#
+# This is scaffolding: the server.conf/agent.conf below use the standard
+# k8s PSAT node attestor and k8s workload attestor. Apply after
+# production.yaml. To consume it, each workload pod mounts the agent socket:
+#   volumes:
+#     - name: spire-agent-socket
+#       hostPath: { path: /run/spire/sockets, type: DirectoryOrCreate }
+#   volumeMounts:
+#     - name: spire-agent-socket
+#       mountPath: /run/spire/sockets
+#       readOnly: true
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: spire-server
+  namespace: sovereign-platform
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: spire-agent
+  namespace: sovereign-platform
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: spire-server-trust-role
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "nodes"]
+    verbs: ["get"]
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: spire-server-trust-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: spire-server-trust-role
+subjects:
+  - kind: ServiceAccount
+    name: spire-server
+    namespace: sovereign-platform
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: spire-agent-trust-role
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "nodes"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: spire-agent-trust-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: spire-agent-trust-role
+subjects:
+  - kind: ServiceAccount
+    name: spire-agent
+    namespace: sovereign-platform
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spire-server
+  namespace: sovereign-platform
+data:
+  server.conf: |
+    server {
+      bind_address = "0.0.0.0"
+      bind_port = "8081"
+      trust_domain = "sovereign-platform"
+      data_dir = "/run/spire/data"
+      default_x509_svid_ttl = "1h"
+      ca_ttl = "24h"
+    }
+    plugins {
+      DataStore "sql" {
+        plugin_data {
+          database_type = "sqlite3"
+          connection_string = "/run/spire/data/datastore.sqlite3"
+        }
+      }
+      NodeAttestor "k8s_psat" {
+        plugin_data {
+          clusters = {
+            "sovereign" = {
+              service_account_allow_list = ["sovereign-platform:spire-agent"]
+            }
+          }
+        }
+      }
+      KeyManager "disk" {
+        plugin_data { keys_path = "/run/spire/data/keys.json" }
+      }
+    }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spire-agent
+  namespace: sovereign-platform
+data:
+  agent.conf: |
+    agent {
+      data_dir = "/run/spire"
+      log_level = "INFO"
+      server_address = "spire-server"
+      server_port = "8081"
+      socket_path = "/run/spire/sockets/agent.sock"
+      trust_domain = "sovereign-platform"
+    }
+    plugins {
+      NodeAttestor "k8s_psat" {
+        plugin_data { cluster = "sovereign" }
+      }
+      KeyManager "memory" {
+        plugin_data {}
+      }
+      WorkloadAttestor "k8s" {
+        plugin_data { skip_kubelet_verification = false }
+      }
+    }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: spire-server
+  namespace: sovereign-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: spire-server
+  serviceName: spire-server
+  template:
+    metadata:
+      labels:
+        app: spire-server
+    spec:
+      serviceAccountName: spire-server
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: spire-server
+          image: ghcr.io/spiffe/spire-server:1.9.6
+          args: ["-config", "/run/spire/config/server.conf"]
+          ports:
+            - containerPort: 8081
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: spire-config
+              mountPath: /run/spire/config
+              readOnly: true
+            - name: spire-data
+              mountPath: /run/spire/data
+          livenessProbe:
+            tcpSocket:
+              port: 8081
+            initialDelaySeconds: 15
+          readinessProbe:
+            tcpSocket:
+              port: 8081
+            initialDelaySeconds: 5
+      volumes:
+        - name: spire-config
+          configMap:
+            name: spire-server
+        - name: spire-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: spire-server
+  namespace: sovereign-platform
+spec:
+  selector:
+    app: spire-server
+  ports:
+    - name: grpc
+      port: 8081
+      targetPort: 8081
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: spire-agent
+  namespace: sovereign-platform
+spec:
+  selector:
+    matchLabels:
+      app: spire-agent
+  template:
+    metadata:
+      labels:
+        app: spire-agent
+    spec:
+      serviceAccountName: spire-agent
+      automountServiceAccountToken: true
+      hostPID: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: spire-agent
+          image: ghcr.io/spiffe/spire-agent:1.9.6
+          args: ["-config", "/run/spire/config/agent.conf"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: spire-config
+              mountPath: /run/spire/config
+              readOnly: true
+            - name: spire-agent-socket
+              mountPath: /run/spire/sockets
+          livenessProbe:
+            exec:
+              command: ["/opt/spire/bin/spire-agent", "healthcheck", "-socketPath", "/run/spire/sockets/agent.sock"]
+            initialDelaySeconds: 15
+          readinessProbe:
+            exec:
+              command: ["/opt/spire/bin/spire-agent", "healthcheck", "-socketPath", "/run/spire/sockets/agent.sock", "-shallow"]
+            initialDelaySeconds: 5
+      volumes:
+        - name: spire-config
+          configMap:
+            name: spire-agent
+        - name: spire-agent-socket
+          hostPath:
+            path: /run/spire/sockets
+            type: DirectoryOrCreate
+---
+# Registration entries for the chassis workloads. Run once against the server
+# (e.g. `kubectl exec spire-server-0 -- /opt/spire/bin/spire-server entry create
+# ...`) or apply via your preferred controller. Held here as the source of
+# truth for the SVID -> workload selector mapping.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spire-registration-entries
+  namespace: sovereign-platform
+data:
+  entries.json: |
+    {
+      "entries": [
+        {
+          "spiffe_id": "spiffe://sovereign-platform/broker",
+          "parent_id": "spiffe://sovereign-platform/spire/agent/k8s_psat/sovereign",
+          "selectors": ["k8s:ns:sovereign-platform", "k8s:sa:broker"]
+        },
+        {
+          "spiffe_id": "spiffe://sovereign-platform/control-plane",
+          "parent_id": "spiffe://sovereign-platform/spire/agent/k8s_psat/sovereign",
+          "selectors": ["k8s:ns:sovereign-platform", "k8s:sa:control-plane"]
+        },
+        {
+          "spiffe_id": "spiffe://sovereign-platform/audit-service",
+          "parent_id": "spiffe://sovereign-platform/spire/agent/k8s_psat/sovereign",
+          "selectors": ["k8s:ns:sovereign-platform", "k8s:sa:audit-service"]
+        },
+        {
+          "spiffe_id": "spiffe://sovereign-platform/metering-service",
+          "parent_id": "spiffe://sovereign-platform/spire/agent/k8s_psat/sovereign",
+          "selectors": ["k8s:ns:sovereign-platform", "k8s:sa:metering-service"]
+        }
+      ]
+    }

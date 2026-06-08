@@ -231,7 +231,10 @@ the SPIRE agent socket (`MESH_SDS_SOCKET_PATH`, default
 workload's SPIFFE id and the bundle under the trust-domain id — and a single
 `spiffe_sds` gRPC cluster (over the agent's Unix socket) is added to the
 bootstrap. Certs then rotate without a re-render or pod restart. The static-
-file path remains the default for dev and non-SPIRE deployments.
+file path remains the default for dev and non-SPIRE deployments. The SPIRE
+control plane that backs this (server, agent DaemonSet, registration entries
+for each chassis SVID) is scaffolded in `deploy/k8s/spire.yaml`; workload pods
+mount the agent socket from `/run/spire/sockets` to reach it.
 
 ## Errors
 
