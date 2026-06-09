@@ -789,6 +789,24 @@ async def _finalize_provision(
             store.put_instance(inst)
         except ClientError:
             logger.exception("failed to persist failed-state for %s", inst.instance_id)
+        # Evidence completeness: a failed apply must be audited too, on BOTH
+        # the sync and async provision paths (the async wrapper used to be the
+        # only one that emitted, so a synchronous failure went unrecorded).
+        audit.emit(
+            "instance.provision_failed",
+            inst.instance_id,
+            details=str(exc),
+            actor=caller.user.principal,
+            tenant_id=tenant_id,
+            decision="deny",
+            metadata={
+                "service_id": inst.service_id,
+                "plan_id": inst.plan_id,
+                "operation_id": inst.operation_id,
+                "reason": inst.operation_reason,
+                "failed_step_kind": inst.failed_step_kind,
+            },
+        )
         raise
 
     inst.status = InstanceStatus.succeeded
@@ -832,22 +850,10 @@ async def _finalize_provision_async(
     background runner never crashes."""
     try:
         await _finalize_provision(inst, caller=caller, tenant_id=tenant_id)
-    except Exception:  # noqa: BLE001 — terminal state already recorded
+    except Exception:  # noqa: BLE001 — terminal state + audit already recorded
+        # _finalize_provision already flipped status=failed and emitted the
+        # instance.provision_failed audit event; just keep the runner alive.
         logger.exception("async provision finalize failed for %s", inst.instance_id)
-        audit.emit(
-            "instance.provision_failed",
-            inst.instance_id,
-            actor=caller.user.principal,
-            tenant_id=tenant_id,
-            decision="deny",
-            metadata={
-                "service_id": inst.service_id,
-                "plan_id": inst.plan_id,
-                "operation_id": inst.operation_id,
-                "reason": inst.operation_reason,
-                "failed_step_kind": inst.failed_step_kind,
-            },
-        )
 
 
 async def _teardown_instance(
