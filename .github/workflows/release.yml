@@ -1,0 +1,54 @@
+name: release
+
+# Cut a release by pushing a tag that matches the package version, e.g.
+#   git tag v0.5.0a0 && git push origin v0.5.0a0
+# The job refuses to publish if the tag and pyproject version disagree, then
+# creates a GitHub release whose body is that version's CHANGELOG section.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version tag to release (e.g. v0.5.0a0)"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve tag
+        id: tag
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify tag matches package version
+        run: |
+          VERSION=$(grep -m1 '^version = ' pyproject.toml | sed -E 's/version = "(.*)"/\1/')
+          if [ "${{ steps.tag.outputs.version }}" != "$VERSION" ]; then
+            echo "::error::tag ${{ steps.tag.outputs.version }} != pyproject version $VERSION" >&2
+            exit 1
+          fi
+
+      - name: Build release notes from CHANGELOG
+        run: python scripts/changelog_extract.py "${{ steps.tag.outputs.version }}" > RELEASE_NOTES.md
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: ${{ steps.tag.outputs.tag }}
+          body_path: RELEASE_NOTES.md
+          prerelease: ${{ contains(steps.tag.outputs.version, 'a') || contains(steps.tag.outputs.version, 'b') || contains(steps.tag.outputs.version, 'rc') }}
