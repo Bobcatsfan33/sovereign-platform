@@ -80,6 +80,7 @@ from sovereign.tenancy.models import (
     ACTION_READ,
     ACTION_UPDATE,
 )
+from sovereign.version import __version__
 
 register_renderer(EnvoyRenderer())
 
@@ -100,7 +101,7 @@ async def lifespan(_app: FastAPI):
             await reconciler
 
 
-app = FastAPI(title="Sovereign Platform — OSB Broker", version="0.4.0", lifespan=lifespan)
+app = FastAPI(title="Sovereign Platform — OSB Broker", version=__version__, lifespan=lifespan)
 install_problem_detail_handlers(app, service_name="broker")
 install_cors(app)
 install_rate_limit(app)

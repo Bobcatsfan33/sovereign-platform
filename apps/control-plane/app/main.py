@@ -34,6 +34,7 @@ from sovereign.renderers import register_renderer, registry
 from sovereign.renderers.envoy import EnvoyRenderer
 from sovereign.security import require_bearer
 from sovereign.settings import get_settings
+from sovereign.version import __version__
 
 logger = logging.getLogger("control-plane")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -44,7 +45,7 @@ async def lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="Sovereign Platform — Envoy Control Plane", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="Sovereign Platform — Envoy Control Plane", version=__version__, lifespan=lifespan)
 install_rate_limit(app)
 install_problem_detail_handlers(app, service_name="control-plane")
 install_metrics_endpoint(
