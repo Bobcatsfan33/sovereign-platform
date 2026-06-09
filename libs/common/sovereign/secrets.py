@@ -23,8 +23,10 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 from abc import ABC, abstractmethod
 from base64 import b64decode
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 import boto3
@@ -161,6 +163,44 @@ def set_secrets_provider(provider: SecretsProvider) -> None:
         _provider = provider
 
 
+class RotatingSecretsProvider(SecretsProvider):
+    """Wraps a backend provider and caches each secret for `ttl_seconds`,
+    re-fetching from the backend after the TTL expires. This is what makes
+    rotation automatic: when the secrets manager rotates a value, every
+    service picks up the new one within one TTL without a restart.
+
+    `force_expire()` drops the cache immediately — wire it to a rotation
+    webhook for instant cutover. The clock is injectable for testing."""
+
+    def __init__(
+        self,
+        backend: SecretsProvider,
+        *,
+        ttl_seconds: float,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._backend = backend
+        self._ttl = ttl_seconds
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._cache: dict[str, tuple[float, str]] = {}
+
+    def get(self, name: str) -> str:
+        now = self._clock()
+        with self._lock:
+            hit = self._cache.get(name)
+            if hit is not None and (now - hit[0]) < self._ttl:
+                return hit[1]
+        value = self._backend.get(name)  # may raise SecretNotFoundError
+        with self._lock:
+            self._cache[name] = (now, value)
+        return value
+
+    def force_expire(self) -> None:
+        with self._lock:
+            self._cache.clear()
+
+
 def _build_provider(s: Settings) -> SecretsProvider:
     """Construct a provider from a settings instance WITHOUT importing
     settings. Kept separate so `get_settings()` can resolve managed secrets
@@ -168,21 +208,29 @@ def _build_provider(s: Settings) -> SecretsProvider:
     get_secrets_provider → get_settings recursion.
 
     Selection is by the SECRETS_PROVIDER setting. Unknown values fail closed
-    so a production typo cannot silently fall back to env-only secrets."""
+    so a production typo cannot silently fall back to env-only secrets. A
+    managed provider is wrapped for automatic rotation when SECRETS_TTL_SECONDS
+    is set."""
     kind = (s.secrets_provider or "env").lower()
     if kind in {"env", ""}:
         return EnvSecretsProvider()
     if kind in {"aws-secrets-manager", "secretsmanager", "asm"}:
-        return AwsSecretsManagerProvider(
+        backend: SecretsProvider = AwsSecretsManagerProvider(
             region_name=s.aws_region,
             prefix=s.secrets_prefix,
         )
-    if kind in {"aws-ssm", "ssm", "parameter-store"}:
-        return AwsSsmParameterProvider(
+    elif kind in {"aws-ssm", "ssm", "parameter-store"}:
+        backend = AwsSsmParameterProvider(
             region_name=s.aws_region,
             prefix=s.secrets_prefix,
         )
-    raise RuntimeError(f"unknown secrets provider {kind!r}")
+    else:
+        raise RuntimeError(f"unknown secrets provider {kind!r}")
+
+    ttl = getattr(s, "secrets_ttl_seconds", 0) or 0
+    if ttl > 0:
+        return RotatingSecretsProvider(backend, ttl_seconds=ttl)
+    return backend
 
 
 def provider_for_settings(s: Settings) -> SecretsProvider:

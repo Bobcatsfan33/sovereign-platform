@@ -226,6 +226,12 @@ class Settings:
     # Vault/Secrets-Manager provider via set_secrets_provider().
     secrets_provider: str = os.getenv("SECRETS_PROVIDER", "env")
     secrets_prefix: str = os.getenv("SECRETS_PREFIX", "")
+    # Automatic rotation: when > 0, a managed secrets provider caches each
+    # value for this many seconds, then re-fetches — so a rotated secret is
+    # picked up within one TTL without a restart. 0 disables (resolve once at
+    # startup). See refresh_managed_secrets() for the re-resolution into
+    # already-running settings.
+    secrets_ttl_seconds: int = int(os.getenv("SECRETS_TTL_SECONDS", "0"))
     require_managed_secrets: bool = _env_bool(
         "REQUIRE_MANAGED_SECRETS",
         default=_default_require_managed_secrets(env),
@@ -342,4 +348,25 @@ def get_settings() -> Settings:
                 "with the Basic-auth RBAC bypass enabled; set "
                 "BROKER_TRUST_BASIC_AUTH=false"
             )
+    return s
+
+
+def refresh_managed_secrets() -> "Settings":
+    """Re-fetch managed secrets into the already-cached Settings instance, in
+    place, so a rotation is picked up without a restart. Expires the rotating
+    provider's cache first so the re-resolution reads fresh values from the
+    backend. No-op for the env provider. Returns the (same) settings instance.
+
+    Wire this to a periodic timer (interval ≈ SECRETS_TTL_SECONDS) or a
+    rotation webhook; either way it is the automation that makes rotation
+    take effect on a running process."""
+    s = get_settings()
+    if (s.secrets_provider or "env").lower() in {"env", ""}:
+        return s
+    from .secrets import RotatingSecretsProvider, provider_for_settings
+
+    provider = provider_for_settings(s)
+    if isinstance(provider, RotatingSecretsProvider):
+        provider.force_expire()
+    _resolve_managed_secrets(s)
     return s
