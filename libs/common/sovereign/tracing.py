@@ -48,3 +48,26 @@ def parse_traceparent(header: str | None) -> tuple[str, str] | None:
 
 def format_traceparent(trace_id: str, span_id: str, *, sampled: bool = True) -> str:
     return f"00-{trace_id}-{span_id}-{'01' if sampled else '00'}"
+
+
+def current_or_new_trace_id() -> str:
+    """The trace id of the in-flight request, or a fresh one if this code is
+    running outside a request (a background task, a cron job)."""
+    return current_trace_id.get() or new_trace_id()
+
+
+def outbound_trace_headers() -> dict[str, str]:
+    """Headers to attach to an outbound service-to-service HTTP call so the
+    trace continues across the hop. Carries the current request's trace id
+    under a new child span — this is what makes a provision diagnosable as a
+    single trace from broker -> control-plane -> audit/metering."""
+    return {"traceparent": format_traceparent(current_or_new_trace_id(), new_span_id())}
+
+
+def subprocess_trace_env() -> dict[str, str]:
+    """Environment to inject into an executor subprocess (terraform/kubectl/…)
+    so the apply step runs inside the request's trace. An OTel-instrumented CLI
+    picks up `TRACEPARENT`; even uninstrumented tools get a correlatable id in
+    the env for log scraping."""
+    tp = format_traceparent(current_or_new_trace_id(), new_span_id())
+    return {"TRACEPARENT": tp}

@@ -15,6 +15,7 @@ from fastapi import Header, HTTPException, status
 
 from .mtls import XFCC_HEADER, parse_xfcc_identity
 from .settings import get_settings
+from .tracing import outbound_trace_headers
 
 
 def _allowed_workload_identities(raw: str) -> set[str]:
@@ -53,6 +54,10 @@ def service_auth_headers() -> dict[str, str]:
         headers[WORKLOAD_IDENTITY_HEADER] = s.asserted_workload_identity()
     if s.shared_bearer_auth_enabled:
         headers["Authorization"] = f"Bearer {s.dev_bearer_token}"
+    # Continue the distributed trace across the hop (E5/WS3). Every inter-
+    # service call already routes through here, so propagating the trace here
+    # makes the whole provisioning path one trace with no per-call-site work.
+    headers.update(outbound_trace_headers())
     return headers
 
 

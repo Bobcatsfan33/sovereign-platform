@@ -15,6 +15,7 @@ WebhookExecutor POSTs to a URL — the lightest possible integration hook.
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
 from typing import ClassVar
@@ -22,6 +23,7 @@ from typing import ClassVar
 import httpx
 
 from ..renderers.artifact import DeploymentStep
+from ..tracing import subprocess_trace_env
 from .base import BaseExecutor, DiffResult, ExecResult
 
 logger = logging.getLogger("sovereign.executors.shell")
@@ -29,13 +31,15 @@ logger = logging.getLogger("sovereign.executors.shell")
 
 def _run(cmd: list[str], *, timeout: float = 120.0) -> tuple[int, str, str]:
     """Run a CLI command. Isolated so tests patch this single function.
-    Returns (returncode, stdout, stderr)."""
+    Returns (returncode, stdout, stderr). The current trace is injected as
+    TRACEPARENT so the apply step is correlatable in the request's trace."""
     proc = subprocess.run(  # noqa: S603 — args are chassis-controlled, never raw user input
         cmd,
         capture_output=True,
         text=True,
         timeout=timeout,
         check=False,
+        env={**os.environ, **subprocess_trace_env()},
     )
     return proc.returncode, proc.stdout, proc.stderr
 
