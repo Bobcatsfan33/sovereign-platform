@@ -1,0 +1,69 @@
+# SLO recording + alerting rules for the chassis services (E5).
+#
+# Built on the RED metrics the services emit (sovereign_http_requests_total,
+# sovereign_http_request_duration_seconds_bucket) and the liveness gauge
+# (sovereign_service_up). SLO targets are documented in docs/slo.md; the
+# recording rules below compute the SLIs and the alerts page when the error
+# budget burns too fast or latency/availability breaches.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: sovereign-slo
+  namespace: sovereign-platform
+  labels:
+    role: alert-rules
+spec:
+  groups:
+    - name: sovereign.sli.recording
+      interval: 30s
+      rules:
+        # Fraction of requests that errored (5xx), per service, over 5m.
+        - record: sovereign:request_error_rate5m
+          expr: |
+            sum by (service) (rate(sovereign_http_requests_total{status=~"5.."}[5m]))
+            /
+            sum by (service) (rate(sovereign_http_requests_total[5m]))
+        # Availability SLI = 1 - error rate.
+        - record: sovereign:request_availability5m
+          expr: 1 - sovereign:request_error_rate5m
+        # p99 request latency (seconds), per service, over 5m.
+        - record: sovereign:request_latency_p99_5m
+          expr: |
+            histogram_quantile(
+              0.99,
+              sum by (le, service) (rate(sovereign_http_request_duration_seconds_bucket[5m]))
+            )
+    - name: sovereign.slo.alerts
+      rules:
+        # Liveness: the process stopped reporting up.
+        - alert: SovereignServiceDown
+          expr: sovereign_service_up == 0
+          for: 5m
+          labels: { severity: critical }
+          annotations:
+            summary: "{{ $labels.service }} is reporting down"
+            description: "sovereign_service_up == 0 for 5m."
+        # Availability SLO 99.9%: page when the 5m error rate exceeds 0.1%.
+        - alert: SovereignErrorBudgetBurn
+          expr: sovereign:request_error_rate5m > 0.001
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $labels.service }} error rate above the 99.9% SLO"
+            description: "5m 5xx rate {{ $value | humanizePercentage }} > 0.1% budget."
+        # Fast burn: a severe spike pages immediately.
+        - alert: SovereignErrorBudgetFastBurn
+          expr: sovereign:request_error_rate5m > 0.05
+          for: 2m
+          labels: { severity: critical }
+          annotations:
+            summary: "{{ $labels.service }} error rate spiking"
+            description: "5m 5xx rate {{ $value | humanizePercentage }} > 5%."
+        # Latency SLO: p99 under 500ms.
+        - alert: SovereignHighLatencyP99
+          expr: sovereign:request_latency_p99_5m > 0.5
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $labels.service }} p99 latency above 500ms SLO"
+            description: "p99 = {{ $value }}s over 5m."
