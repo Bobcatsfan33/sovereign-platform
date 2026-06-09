@@ -29,11 +29,12 @@ from sovereign.observability import install_metrics_endpoint
 from sovereign.ratelimit import install_rate_limit
 from sovereign.security import require_bearer
 from sovereign.usage_store import UsageStore
+from sovereign.version import __version__
 
 logger = logging.getLogger("metering-service")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
-app = FastAPI(title="Sovereign Platform — Metering Service", version="0.1.0")
+app = FastAPI(title="Sovereign Platform — Metering Service", version=__version__)
 install_rate_limit(app)
 install_metrics_endpoint(
     app,
