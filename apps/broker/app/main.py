@@ -43,6 +43,7 @@ from sovereign.cors import install_cors
 from sovereign.errors import install_problem_detail_handlers
 from sovereign.executors import register_default_executors
 from sovereign.executors import registry as executor_registry
+from sovereign.health import callable_dependency, http_dependency, install_readiness
 from sovereign.metering import Metering
 from sovereign.models import (
     Binding,
@@ -581,6 +582,18 @@ def healthz() -> dict[str, Any]:
         "packs": registered_packs(),
         "policy_bundles": collect_policy_bundle_dirs(),
     }
+
+
+# Readiness gates traffic on real dependency health: the state store must be
+# reachable and the control-plane (which renders every provision) must answer.
+install_readiness(
+    app,
+    service="broker",
+    checks=[
+        callable_dependency("dynamodb", lambda: store.instances.load()),
+        http_dependency("control-plane", f"{get_settings().control_plane_url}/healthz"),
+    ],
+)
 
 
 @app.get("/v2/catalog")
