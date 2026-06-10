@@ -20,6 +20,7 @@ from typing import Any
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import Depends, FastAPI, HTTPException, Response, status
+from sovereign.apiversion import install_api_versioning
 from sovereign.audit import Audit
 from sovereign.errors import install_problem_detail_handlers
 from sovereign.executors import register_default_executors
@@ -46,6 +47,7 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="Sovereign Platform — Envoy Control Plane", version=__version__, lifespan=lifespan)
+install_api_versioning(app)
 install_rate_limit(app)
 install_problem_detail_handlers(app, service_name="control-plane")
 install_metrics_endpoint(
