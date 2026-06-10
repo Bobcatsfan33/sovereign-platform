@@ -8,6 +8,26 @@ repeatable and teardown is verified.
 Pick the riskiest pilot: the **Data pack `terraform-apply`** service type
 (exercises init/plan/apply/state/outputs), not a config-only pack.
 
+## Executable form
+
+This procedure is automated by **`scripts/ws1_pilot.py`** — it drives the
+lifecycle through a deployed broker, validates both drift classes, checks the
+evidence loop, and prints GO / NO-GO per gate. The manual steps below remain
+the reference; the script is what you actually run:
+
+```bash
+python scripts/ws1_pilot.py \
+  --broker-url https://broker.example --basic broker:"$BROKER_PASSWORD" \
+  --audit-url https://audit.example \
+  --service-id sovereign-data-terraform --plan-id standard --params @pilot-params.json \
+  --drift-edit-cmd 'aws ec2 create-tags ...' \
+  --drift-block-cmd 'aws iam ... deny' --drift-unblock-cmd 'aws iam ... allow'
+```
+
+Restart the broker out of band between the provision and the rerun so the
+`persist_across_restart` gate is meaningful. Its orchestration is unit-tested
+(`tests/test_ws1_pilot.py`); only the live infra is missing.
+
 ## Preconditions
 
 - Disposable AWS account; `terraform`, `kubectl`, `aws` on PATH for the
