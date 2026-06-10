@@ -33,6 +33,7 @@ from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, st
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel, Field
+from sovereign.apiversion import install_api_versioning
 from sovereign.audit import Audit
 from sovereign.catalog import CatalogStore
 from sovereign.connectors import registry as connector_registry
@@ -102,6 +103,7 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="Sovereign Platform — OSB Broker", version=__version__, lifespan=lifespan)
+install_api_versioning(app)
 install_problem_detail_handlers(app, service_name="broker")
 install_cors(app)
 install_rate_limit(app)

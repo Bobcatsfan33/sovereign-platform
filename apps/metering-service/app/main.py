@@ -24,6 +24,7 @@ from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.responses import JSONResponse
+from sovereign.apiversion import install_api_versioning
 from sovereign.models import Usage
 from sovereign.observability import install_metrics_endpoint
 from sovereign.ratelimit import install_rate_limit
@@ -35,6 +36,7 @@ logger = logging.getLogger("metering-service")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
 app = FastAPI(title="Sovereign Platform — Metering Service", version=__version__)
+install_api_versioning(app)
 install_rate_limit(app)
 install_metrics_endpoint(
     app,

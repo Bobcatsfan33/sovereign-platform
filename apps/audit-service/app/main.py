@@ -38,6 +38,7 @@ from typing import Any
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.responses import JSONResponse
+from sovereign.apiversion import install_api_versioning
 from sovereign.audit_signing import sign_audit_event
 from sovereign.audit_spool import AuditSpool
 from sovereign.cors import install_cors
@@ -52,6 +53,7 @@ logger = logging.getLogger("audit-service")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
 app = FastAPI(title="Sovereign Platform — Audit Service", version=__version__)
+install_api_versioning(app)
 install_cors(app)
 install_rate_limit(app)
 
