@@ -89,6 +89,32 @@ def test_cosign_admission_policy_exists() -> None:
     assert verify["attestations"][0]["type"] == "https://slsa.dev/provenance/v1"
 
 
+def test_backend_services_have_horizontal_autoscaling() -> None:
+    """Each backend service scales with load (CPU-driven HPA), within sane
+    bounds, targeting a real Deployment that carries resource requests."""
+    docs = _k8s_docs()
+    hpas = {
+        d["metadata"]["name"]: d
+        for d in docs
+        if d.get("kind") == "HorizontalPodAutoscaler"
+    }
+    deployments = {d["metadata"]["name"]: d for d in docs if d.get("kind") == "Deployment"}
+
+    for service in ("broker", "control-plane", "audit-service", "metering-service"):
+        hpa = hpas[service]
+        spec = hpa["spec"]
+        assert spec["scaleTargetRef"]["kind"] == "Deployment"
+        assert spec["scaleTargetRef"]["name"] == service
+        assert spec["minReplicas"] >= 2
+        assert spec["maxReplicas"] > spec["minReplicas"]
+        metric_names = {m["resource"]["name"] for m in spec["metrics"] if m["type"] == "Resource"}
+        assert "cpu" in metric_names  # utilization-based HPA needs requests
+
+        # The target Deployment must declare CPU requests for HPA to work.
+        app = deployments[service]["spec"]["template"]["spec"]["containers"][0]
+        assert "cpu" in app["resources"]["requests"]
+
+
 def test_spire_control_plane_manifest_present() -> None:
     """SPIRE server (StatefulSet) + agent (DaemonSet) exist with the platform
     trust domain, and the agent serves the Workload API on the socket path
