@@ -28,6 +28,7 @@ from sovereign.apiversion import install_api_versioning
 from sovereign.models import Usage
 from sovereign.observability import install_metrics_endpoint
 from sovereign.ratelimit import install_rate_limit
+from sovereign.rotation import install_rotation_webhook
 from sovereign.security import require_bearer
 from sovereign.usage_store import UsageStore
 from sovereign.version import __version__
@@ -37,6 +38,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 
 app = FastAPI(title="Sovereign Platform — Metering Service", version=__version__)
 install_api_versioning(app)
+install_rotation_webhook(app)
 install_rate_limit(app)
 install_metrics_endpoint(
     app,

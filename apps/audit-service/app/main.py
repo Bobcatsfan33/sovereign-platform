@@ -45,6 +45,7 @@ from sovereign.cors import install_cors
 from sovereign.models import AuditEvent
 from sovereign.observability import install_metrics_endpoint
 from sovereign.ratelimit import install_rate_limit
+from sovereign.rotation import install_rotation_webhook
 from sovereign.security import require_bearer
 from sovereign.settings import get_settings
 from sovereign.version import __version__
@@ -54,6 +55,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 
 app = FastAPI(title="Sovereign Platform — Audit Service", version=__version__)
 install_api_versioning(app)
+install_rotation_webhook(app)
 install_cors(app)
 install_rate_limit(app)
 
