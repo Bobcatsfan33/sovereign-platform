@@ -33,6 +33,7 @@ from sovereign.ratelimit import install_rate_limit
 from sovereign.render import RenderValidationError
 from sovereign.renderers import register_renderer, registry
 from sovereign.renderers.envoy import EnvoyRenderer
+from sovereign.rotation import install_rotation_webhook
 from sovereign.security import require_bearer
 from sovereign.settings import get_settings
 from sovereign.version import __version__
@@ -48,6 +49,7 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="Sovereign Platform — Envoy Control Plane", version=__version__, lifespan=lifespan)
 install_api_versioning(app)
+install_rotation_webhook(app)
 install_rate_limit(app)
 install_problem_detail_handlers(app, service_name="control-plane")
 install_metrics_endpoint(
