@@ -7,6 +7,15 @@ terraform {
 
 provider "aws" { region = var.region }
 
+module "kms" { source = "./modules/kms" }
+module "iam" {
+  source              = "./modules/iam"
+  oidc_provider_arn   = var.oidc_provider_arn
+  oidc_provider_url   = var.oidc_provider_url
+  instances_table_arn = var.instances_table_arn
+  bindings_table_arn  = var.bindings_table_arn
+  config_bucket_arn   = var.config_bucket_arn
+}
 module "state" { source = "./modules/dynamodb" }
 module "artifacts" {
   source = "./modules/s3"

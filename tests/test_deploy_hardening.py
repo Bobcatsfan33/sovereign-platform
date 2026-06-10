@@ -175,3 +175,24 @@ def test_terraform_hardening_controls_present() -> None:
     assert 'http_tokens   = "required"' in terraform
     asg = (ROOT / "infra" / "terraform" / "modules" / "asg" / "main.tf").read_text()
     assert 'ingress { from_port = 80 to_port = 8443 protocol = "tcp" cidr_blocks = ["0.0.0.0/0"] }' not in asg
+
+
+def test_terraform_kms_rotation_and_least_privilege_iam() -> None:
+    kms = (ROOT / "infra" / "terraform" / "modules" / "kms" / "main.tf").read_text()
+    assert "aws_kms_key" in kms
+    assert "enable_key_rotation     = true" in kms
+
+    iam = (ROOT / "infra" / "terraform" / "modules" / "iam" / "main.tf").read_text()
+    # Per-service roles, not one shared role.
+    assert 'name               = "sovereign-${each.value}"' in iam
+    for svc in ("broker", "control-plane", "audit-service", "metering-service"):
+        assert svc in iam
+    # Least privilege: explicit actions + scoped resources, no action wildcard.
+    assert "dynamodb:GetItem" in iam
+    assert 'actions   = ["*"]' not in iam
+    assert 'actions = ["*"]' not in iam
+
+    # The modules are wired into the root module.
+    root = (ROOT / "infra" / "terraform" / "main.tf").read_text()
+    assert 'module "kms"' in root
+    assert 'module "iam"' in root
