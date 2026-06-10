@@ -129,6 +129,25 @@ commitment, and a release/upgrade policy operations can rely on.
 
 ---
 
+## Delivered in this program
+
+Code/config/doc deliverables shipped against the workstreams (all merged, the
+test gate green). The **live-gated** and **external** items above remain.
+
+| WS | Delivered | PR |
+|----|-----------|----|
+| WS1 | Audit the sync provision-failure path (closed evidence gap) + lifecycle evidence e2e | #38 |
+| WS3 | Trace propagation across the provisioning path (service-to-service + executor subprocess) | #39 |
+| WS3 | Deep `/readyz` readiness gating traffic on dependency health | #43 |
+| WS5 | Automatic secret rotation (TTL refetch + re-resolve) | #40 |
+| WS5 | HashiCorp Vault secrets backend (cloud-agnostic substrate) | #41 |
+| WS5 | API version negotiation + RFC 8594 deprecation/sunset | #42 |
+| WS5 | Secret-rotation webhook (instant cutover) | #44 |
+| WS4 | NIST 800-53 → ISO/IEC 27001 crosswalk, validated | #45 |
+| WS2 | Horizontal pod autoscaling for backend services | #46 |
+| WS2 | KMS key rotation + least-privilege per-service IAM | #47 |
+| WS6 | `SECURITY.md` disclosure policy + `docs/governance.md` contract | #48 |
+
 ## What code cannot close
 
 Per the assessment, the program's keystone (WS1 live pilot) and several exit
