@@ -232,6 +232,12 @@ class Settings:
     # startup). See refresh_managed_secrets() for the re-resolution into
     # already-running settings.
     secrets_ttl_seconds: int = int(os.getenv("SECRETS_TTL_SECONDS", "0"))
+    # HashiCorp Vault backend (SECRETS_PROVIDER=vault) — cloud-agnostic managed
+    # secrets so the substrate is not AWS-only. Secrets live at
+    # {VAULT_KV_MOUNT}/data/{SECRETS_PREFIX}{name} with a `value` field.
+    vault_addr: str = os.getenv("VAULT_ADDR", "")
+    vault_token: str = os.getenv("VAULT_TOKEN", "")
+    vault_kv_mount: str = os.getenv("VAULT_KV_MOUNT", "secret")
     require_managed_secrets: bool = _env_bool(
         "REQUIRE_MANAGED_SECRETS",
         default=_default_require_managed_secrets(env),

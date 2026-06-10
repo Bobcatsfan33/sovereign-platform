@@ -30,6 +30,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 import boto3
+import httpx
 from botocore.exceptions import BotoCoreError, ClientError
 
 if TYPE_CHECKING:
@@ -152,6 +153,51 @@ class AwsSsmParameterProvider(SecretsProvider):
         return str(value)
 
 
+class VaultSecretsProvider(SecretsProvider):
+    """Reads secrets from HashiCorp Vault's KV v2 engine over the HTTP API.
+
+    Cloud-agnostic — Vault runs on any substrate — so the platform's managed
+    secrets are not tied to AWS, closing the multi-cloud substrate gap. Each
+    secret is stored at `{mount}/data/{prefix}{name}` with a `value` field;
+    `SECRETS_PREFIX` scopes environments as with the AWS providers. Uses the
+    already-vendored httpx, so no cloud SDK is added."""
+
+    def __init__(
+        self,
+        *,
+        addr: str,
+        token: str,
+        mount: str = "secret",
+        prefix: str = "",
+        timeout: float = 5.0,
+    ) -> None:
+        self._addr = addr.rstrip("/")
+        self._token = token
+        self._mount = mount.strip("/")
+        self._prefix = prefix
+        self._timeout = timeout
+
+    def _url(self, name: str) -> str:
+        return f"{self._addr}/v1/{self._mount}/data/{self._prefix}{name}"
+
+    def get(self, name: str) -> str:
+        try:
+            response = httpx.get(
+                self._url(name),
+                headers={"X-Vault-Token": self._token},
+                timeout=self._timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise SecretNotFoundError(name) from exc
+        if response.status_code != 200:
+            raise SecretNotFoundError(name)
+        data = response.json().get("data", {}).get("data", {})
+        value = data.get("value")
+        if value is None:
+            raise SecretNotFoundError(name)
+        return str(value)
+
+
 _lock = threading.Lock()
 _provider: SecretsProvider | None = None
 
@@ -222,6 +268,13 @@ def _build_provider(s: Settings) -> SecretsProvider:
     elif kind in {"aws-ssm", "ssm", "parameter-store"}:
         backend = AwsSsmParameterProvider(
             region_name=s.aws_region,
+            prefix=s.secrets_prefix,
+        )
+    elif kind in {"vault", "hashicorp-vault", "hcp-vault"}:
+        backend = VaultSecretsProvider(
+            addr=s.vault_addr,
+            token=s.vault_token,
+            mount=s.vault_kv_mount,
             prefix=s.secrets_prefix,
         )
     else:
