@@ -1,5 +1,10 @@
-variable "bucket_name" { type = string }
-variable "kms_deletion_window_in_days" { type = number default = 30 }
+variable "bucket_name" {
+  type = string
+}
+variable "kms_deletion_window_in_days" {
+  type    = number
+  default = 30
+}
 
 resource "aws_kms_key" "configs" {
   description             = "Sovereign Platform config artifact encryption"
@@ -12,7 +17,10 @@ resource "aws_kms_alias" "configs" {
   target_key_id = aws_kms_key.configs.key_id
 }
 
-resource "aws_s3_bucket" "configs" { bucket = var.bucket_name }
+#tfsec:ignore:aws-s3-enable-bucket-logging access logging targets an env-specific archive bucket
+resource "aws_s3_bucket" "configs" {
+  bucket = var.bucket_name
+}
 
 resource "aws_s3_bucket_public_access_block" "configs" {
   bucket                  = aws_s3_bucket.configs.id

@@ -285,3 +285,24 @@ jobs:
           SOVEREIGN_BEARER_TOKEN: ${{ secrets.SOVEREIGN_BEARER_TOKEN }}
           AWS_REGION: us-gov-west-1
         run: python scripts/continuous_monitor.py --format json
+
+  terraform:
+    name: terraform (validate + tfsec)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false
+      - run: terraform validate
+      - name: tfsec (IaC SAST — pinned; waivers are inline #tfsec:ignore only)
+        run: |
+          curl -fsSL -o /usr/local/bin/tfsec \
+            https://github.com/aquasecurity/tfsec/releases/download/v1.28.13/tfsec-linux-amd64
+          chmod +x /usr/local/bin/tfsec
+          tfsec .
