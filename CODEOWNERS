@@ -1,0 +1,23 @@
+# CODEOWNERS — required reviewers for security-sensitive paths (SH-2).
+#
+# A second maintainer is the continuity requirement; until one is named, the
+# owner below is the sole reviewer. Add the second maintainer here (and to the
+# branch-protection config in scripts/org/protect.sh) to make code-owner review
+# on these paths a two-person gate.
+
+# Default owner for everything.
+*                                   @Bobcatsfan33
+
+# Auth + identity — the disqualifying surface.
+/libs/common/sovereign/security.py  @Bobcatsfan33
+/libs/common/sovereign/idp/         @Bobcatsfan33
+/libs/common/sovereign/settings.py  @Bobcatsfan33
+/libs/common/sovereign/secrets.py   @Bobcatsfan33
+
+# Policy-as-code and the deployment substrate.
+/policies/                          @Bobcatsfan33
+/infra/                             @Bobcatsfan33
+/deploy/                            @Bobcatsfan33
+
+# CI/CD and supply chain.
+/.github/                           @Bobcatsfan33
