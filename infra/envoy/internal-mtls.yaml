@@ -1,0 +1,59 @@
+# infra/envoy/internal-mtls.yaml — the front-door listener that makes the XFCC
+# path in security.py REAL. Envoy terminates mutual TLS, sanitizes any
+# client-supplied X-Forwarded-Client-Cert, and forwards the TLS-verified peer
+# identity. This is the missing link the code already trusts: require_bearer
+# accepts XFCC because "Envoy sanitises any client-supplied copy" — here is the
+# Envoy config that actually does it.
+#
+# Deploy in front of the internal control plane (broker <-> audit <-> metering)
+# with mtls_required=true on the services. Certs are the mesh material at
+# /etc/sovereign/tls (tls.crt / tls.key / ca.crt), the same convention the
+# renderer and the per-pod sidecars use.
+static_resources:
+  listeners:
+    - name: internal_plane
+      address: { socket_address: { address: 0.0.0.0, port_value: 9443 } }
+      filter_chains:
+        - transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+              require_client_certificate: true
+              common_tls_context:
+                tls_params: { tls_minimum_protocol_version: TLSv1_3 }
+                tls_certificates:
+                  - certificate_chain: { filename: /etc/sovereign/tls/tls.crt }
+                    private_key: { filename: /etc/sovereign/tls/tls.key }
+                validation_context:
+                  trusted_ca: { filename: /etc/sovereign/tls/ca.crt }
+          filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: internal_plane
+                # SANITIZE_SET: drop any inbound XFCC and set it from the
+                # verified TLS session — the property security.py relies on.
+                forward_client_cert_details: SANITIZE_SET
+                set_current_client_cert_details: { uri: true }
+                http_filters:
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+                route_config:
+                  name: internal
+                  virtual_hosts:
+                    - name: internal_services
+                      domains: ["*"]
+                      routes:
+                        - match: { prefix: "/" }
+                          route: { cluster: local_services }
+  clusters:
+    - name: local_services
+      type: STRICT_DNS
+      connect_timeout: 2s
+      load_assignment:
+        cluster_name: local_services
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address: { socket_address: { address: 127.0.0.1, port_value: 8080 } }
