@@ -64,6 +64,7 @@ data "aws_iam_policy_document" "broker" {
       "dynamodb:Query",
       "dynamodb:DeleteItem",
     ]
+    #tfsec:ignore:aws-iam-no-policy-wildcards GSI access needs table/index/*; table ARNs are explicit
     resources = [
       var.instances_table_arn,
       "${var.instances_table_arn}/index/*",
@@ -71,8 +72,9 @@ data "aws_iam_policy_document" "broker" {
     ]
   }
   statement {
-    effect    = "Allow"
-    actions   = ["s3:GetObject"]
+    effect  = "Allow"
+    actions = ["s3:GetObject"]
+    #tfsec:ignore:aws-iam-no-policy-wildcards object access needs <bucket>/*; bucket is explicit
     resources = ["${var.config_bucket_arn}/*"]
   }
 }
@@ -86,8 +88,9 @@ resource "aws_iam_role_policy" "broker" {
 # Control-plane writes rendered artifacts to the config bucket only.
 data "aws_iam_policy_document" "control_plane" {
   statement {
-    effect    = "Allow"
-    actions   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
+    effect  = "Allow"
+    actions = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
+    #tfsec:ignore:aws-iam-no-policy-wildcards object access needs <bucket>/*; bucket is explicit
     resources = ["${var.config_bucket_arn}/*"]
   }
 }

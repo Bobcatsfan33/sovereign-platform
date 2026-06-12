@@ -165,16 +165,40 @@ def test_spire_registration_covers_chassis_services() -> None:
 
 
 def test_terraform_hardening_controls_present() -> None:
-    terraform = "\n".join(
-        p.read_text() for p in sorted((ROOT / "infra" / "terraform").rglob("*.tf"))
+    # Whitespace-collapsed so the assertions survive `terraform fmt` alignment.
+    terraform = " ".join(
+        " ".join(p.read_text().split())
+        for p in sorted((ROOT / "infra" / "terraform").rglob("*.tf"))
     )
     assert "aws_s3_bucket_public_access_block" in terraform
-    assert 'sse_algorithm     = "aws:kms"' in terraform
+    assert 'sse_algorithm = "aws:kms"' in terraform
     assert "point_in_time_recovery { enabled = true }" in terraform
     assert "deletion_protection_enabled = true" in terraform
-    assert 'http_tokens   = "required"' in terraform
+    assert 'http_tokens = "required"' in terraform
+    asg = " ".join((ROOT / "infra" / "terraform" / "modules" / "asg" / "main.tf").read_text().split())
+    # Ingress is restricted to the allowed CIDRs (not public 0.0.0.0/0).
+    assert "cidr_blocks = var.allowed_ingress_cidrs" in asg
+
+
+def test_terraform_remote_state_backend() -> None:
+    backend = (ROOT / "infra" / "terraform" / "backend.tf").read_text()
+    assert 'backend "s3"' in backend
+    assert "encrypt = true" in backend
+    # Locking via DynamoDB documented in the init backend-config.
+    assert "dynamodb_table" in backend
+    # No state is ever committed.
+    gitignore = (ROOT / ".gitignore").read_text()
+    assert "*.tfstate" in gitignore
+    assert list((ROOT / "infra" / "terraform").rglob("*.tfstate")) == []
+
+
+def test_terraform_multi_az_and_asg_scaling() -> None:
+    network = (ROOT / "infra" / "terraform" / "modules" / "network" / "main.tf").read_text()
+    assert "count             = 3" in network  # three AZs
+    assert "availability_zone" in network
     asg = (ROOT / "infra" / "terraform" / "modules" / "asg" / "main.tf").read_text()
-    assert 'ingress { from_port = 80 to_port = 8443 protocol = "tcp" cidr_blocks = ["0.0.0.0/0"] }' not in asg
+    assert "aws_autoscaling_policy" in asg  # target-tracking scaling
+    assert "aws_cloudwatch_metric_alarm" in asg  # alarm
 
 
 def test_terraform_kms_rotation_and_least_privilege_iam() -> None:
