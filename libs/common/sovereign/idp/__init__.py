@@ -16,6 +16,17 @@ Public surface::
 """
 
 from .group_sync import sync_groups_to_roles
-from .oidc import OidcVerifier
+from .oidc import (
+    OidcVerifier,
+    get_oidc_verifier,
+    reset_oidc_verifier,
+    set_oidc_verifier,
+)
 
-__all__ = ["OidcVerifier", "sync_groups_to_roles"]
+__all__ = [
+    "OidcVerifier",
+    "get_oidc_verifier",
+    "reset_oidc_verifier",
+    "set_oidc_verifier",
+    "sync_groups_to_roles",
+]

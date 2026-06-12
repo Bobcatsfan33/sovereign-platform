@@ -13,6 +13,7 @@ import secrets
 
 from fastapi import Header, HTTPException, status
 
+from .idp import get_oidc_verifier
 from .mtls import XFCC_HEADER, parse_xfcc_identity
 from .settings import get_settings
 from .tracing import outbound_trace_headers
@@ -67,9 +68,10 @@ async def require_bearer(
     spiffe_id: str | None = Header(default=None, alias="X-SPIFFE-ID"),
     forwarded_client_cert: str | None = Header(default=None, alias=XFCC_HEADER),
 ) -> str:
-    """FastAPI dependency. Returns the caller identity (currently a stub
-    `"dev-user"` — replaced with a real subject claim once OIDC lands in
-    Phase 3). Raises 401 if the token is missing, 403 if it mismatches."""
+    """FastAPI dependency. Returns the verified caller identity: an mTLS/
+    workload identity, an OIDC `sub`, or (dev/test only) the synthetic
+    `"shared-bearer"` principal. Raises 401/403 when auth is missing or
+    invalid, 503 when no auth scheme is configured."""
 
     s = get_settings()
 
@@ -103,6 +105,34 @@ async def require_bearer(
             detail="workload identity is not allowed",
         )
 
+    # S-1 — OIDC bearer: the production path for human, CI, and portal callers.
+    # When an issuer is configured (always true outside dev), a Bearer token is
+    # verified against the IdP's JWKS and the real `sub` is returned — not a
+    # synthetic stub. When OIDC is required but no token is presented, fail closed.
+    if s.require_oidc or s.oidc_issuer_url:
+        if authorization and authorization.startswith("Bearer "):
+            token = authorization.removeprefix("Bearer ").strip()
+            try:
+                claims = get_oidc_verifier().verify(token)
+            except Exception as exc:  # noqa: BLE001 — any verify failure is a 401
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="invalid or expired token",
+                ) from exc
+            subject = claims.get("sub")
+            if not subject:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="token missing 'sub' claim",
+                )
+            return str(subject)
+        if s.require_oidc:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="OIDC bearer token required",
+                headers={"WWW-Authenticate": 'Bearer realm="sovereign-platform"'},
+            )
+
     if not s.shared_bearer_auth_enabled:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -122,4 +152,6 @@ async def require_bearer(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="invalid token",
         )
-    return "dev-user"
+    # The shared-bearer path is a dev/test convenience; it carries no real
+    # subject, so it returns a clearly-synthetic principal.
+    return "shared-bearer"
