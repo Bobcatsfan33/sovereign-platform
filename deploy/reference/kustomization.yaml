@@ -1,0 +1,17 @@
+# deploy/reference/ — the always-on hardened reference deployment (S-4).
+#
+# A kustomize overlay over the production manifests that the hourly
+# continuous-monitor CI cron probes, turning the SSP from scaffold into
+# continuous evidence (the FedRAMP 20x KSI story in miniature). A single-node
+# k3s is sufficient. The overlay runs the FULL strict production posture:
+# OIDC verified, shared bearer off, mesh mTLS strict.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: sovereign-platform
+resources:
+  - ../k8s
+patches:
+  - path: posture-patch.yaml
+    target:
+      kind: ConfigMap
+      name: sovereign-config
