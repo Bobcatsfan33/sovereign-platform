@@ -1,0 +1,12 @@
+# deploy/k8s — the production manifest base. The reference overlay
+# (deploy/reference) builds on this; apply this directly with `kubectl apply -k`.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - production.yaml
+  - autoscaling.yaml
+  - spire.yaml
+  - mesh-sidecars.yaml
+  - prometheus-rules.yaml
+  - frontdoor-rate-limit.yaml
+  - admission-cosign-policy.yaml

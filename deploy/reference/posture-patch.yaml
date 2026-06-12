@@ -1,0 +1,11 @@
+# Strict-posture patch for the reference deployment (S-4). The base already
+# runs OIDC-on / shared-bearer-off; the reference additionally enforces mesh
+# mTLS strict so continuous monitoring observes the full hardened runtime.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sovereign-config
+  namespace: sovereign-platform
+data:
+  MTLS_REQUIRED: "true"
+  MESH_MTLS_STRICT: "true"
