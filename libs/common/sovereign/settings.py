@@ -357,6 +357,28 @@ def get_settings() -> Settings:
     return s
 
 
+def assert_secure_posture(s: "Settings") -> None:
+    """Refuse to run a managed environment with an insecure auth posture.
+
+    Called at each service's startup. A no-op in dev/test; in a managed
+    environment it fails fast (non-zero exit) rather than quietly serving on a
+    shared static token with no strong auth — making secure-by-default an
+    enforced property, not a configuration the operator must remember."""
+    if not _requires_real_secrets(s.env):
+        return
+    if s.shared_bearer_auth_enabled:
+        raise RuntimeError(
+            f"FATAL: shared bearer auth is enabled in a managed environment "
+            f"(ENV={s.env}). Set SHARED_BEARER_AUTH_ENABLED=false and use OIDC "
+            "or workload identity."
+        )
+    if not (s.require_oidc or s.mtls_required):
+        raise RuntimeError(
+            f"FATAL: no strong auth (OIDC or mTLS) configured for a managed "
+            f"environment (ENV={s.env})."
+        )
+
+
 def refresh_managed_secrets() -> "Settings":
     """Re-fetch managed secrets into the already-cached Settings instance, in
     place, so a rotation is picked up without a restart. Expires the rotating

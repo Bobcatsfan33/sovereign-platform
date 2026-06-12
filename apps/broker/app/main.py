@@ -68,7 +68,7 @@ from sovereign.renderers import registry as renderer_registry
 from sovereign.renderers.envoy import EnvoyRenderer  # noqa: F401  (side-effect import)
 from sovereign.rotation import install_rotation_webhook
 from sovereign.security import service_auth_headers
-from sovereign.settings import get_settings
+from sovereign.settings import assert_secure_posture, get_settings
 from sovereign.store import Store
 from sovereign.tenancy import (
     AuthzResolver,
@@ -107,6 +107,7 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title="Sovereign Platform — OSB Broker", version=__version__, lifespan=lifespan)
 install_api_versioning(app)
 install_rotation_webhook(app)
+assert_secure_posture(get_settings())
 install_problem_detail_handlers(app, service_name="broker")
 install_cors(app)
 install_rate_limit(app)
