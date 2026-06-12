@@ -1,0 +1,24 @@
+# .github/workflows/security.yml — this repo's caller of the org-maintained
+# security suite: CodeQL, Trivy image gating, CycloneDX SBOM, cosign keyless
+# signing, and SLSA v1 provenance. Signing + provenance run on main pushes;
+# CodeQL + build + Trivy gate run on every PR.
+name: security
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+jobs:
+  suite:
+    uses: Bobcatsfan33/.github/.github/workflows/security-reusable.yml@main
+    permissions:
+      contents: read
+      security-events: write
+      packages: write
+      id-token: write
+      attestations: write
+      actions: read
+    with:
+      image: ghcr.io/bobcatsfan33/sovereign-platform/broker
+      languages: '["python","javascript"]'
+      dockerfile: apps/broker/Dockerfile
