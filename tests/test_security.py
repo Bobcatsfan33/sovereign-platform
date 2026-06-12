@@ -44,7 +44,7 @@ def test_valid_token_returns_200() -> None:
     client = TestClient(_app())
     r = client.get("/protected", headers=AUTH_HEADER)
     assert r.status_code == 200
-    assert r.json() == {"ok": "yes", "identity": "dev-user"}
+    assert r.json() == {"ok": "yes", "identity": "shared-bearer"}
 
 
 def test_shared_bearer_disabled_returns_503(monkeypatch) -> None:  # type: ignore[no-untyped-def]

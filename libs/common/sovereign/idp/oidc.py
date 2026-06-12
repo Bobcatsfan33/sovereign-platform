@@ -205,3 +205,47 @@ class OidcVerifier:
         """Return the cached (or freshly-fetched) discovery document.
         Useful for /healthz to show the issuer is reachable."""
         return self._get_discovery()
+
+
+# ── Process-wide verifier (S-1) ───────────────────────────────────────
+
+_verifier: OidcVerifier | None = None
+_verifier_issuer: str | None = None
+_verifier_lock = threading.Lock()
+
+
+def get_oidc_verifier() -> OidcVerifier:
+    """Return the process-wide verifier, (re)built from settings when the
+    configured issuer changes. So `require_bearer` can verify OIDC tokens
+    without each call site constructing (and re-fetching JWKS for) a verifier."""
+    global _verifier, _verifier_issuer
+    from ..settings import get_settings
+
+    s = get_settings()
+    with _verifier_lock:
+        if _verifier is None or _verifier_issuer != s.oidc_issuer_url:
+            _verifier = OidcVerifier(
+                s.oidc_issuer_url,
+                audience=s.oidc_audience or None,
+                cache_ttl=s.oidc_jwks_cache_ttl_seconds,
+                stale_grace=s.oidc_jwks_stale_grace_seconds,
+            )
+            _verifier_issuer = s.oidc_issuer_url
+        return _verifier
+
+
+def set_oidc_verifier(verifier: OidcVerifier) -> None:
+    """Install a verifier (test hook / explicit registration)."""
+    global _verifier, _verifier_issuer
+    from ..settings import get_settings
+
+    with _verifier_lock:
+        _verifier = verifier
+        _verifier_issuer = get_settings().oidc_issuer_url
+
+
+def reset_oidc_verifier() -> None:
+    global _verifier, _verifier_issuer
+    with _verifier_lock:
+        _verifier = None
+        _verifier_issuer = None
