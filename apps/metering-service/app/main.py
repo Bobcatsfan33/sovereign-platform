@@ -30,6 +30,7 @@ from sovereign.observability import install_metrics_endpoint
 from sovereign.ratelimit import install_rate_limit
 from sovereign.rotation import install_rotation_webhook
 from sovereign.security import require_bearer
+from sovereign.settings import assert_secure_posture, get_settings
 from sovereign.usage_store import UsageStore
 from sovereign.version import __version__
 
@@ -39,6 +40,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 app = FastAPI(title="Sovereign Platform — Metering Service", version=__version__)
 install_api_versioning(app)
 install_rotation_webhook(app)
+assert_secure_posture(get_settings())
 install_rate_limit(app)
 install_metrics_endpoint(
     app,

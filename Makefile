@@ -1,4 +1,7 @@
-.PHONY: help venv install up up-detached down clean logs status seed test test-cov lint typecheck security-scan check fmt smoke
+.PHONY: help venv install bootstrap-env up up-detached down clean logs status seed test test-cov lint typecheck security-scan check fmt smoke
+
+bootstrap-env:  ## generate .env with random credentials if it does not exist
+	@test -f .env || bash scripts/bootstrap-env.sh
 
 # Auto-detect a Python >=3.11 interpreter. Override with `make PYTHON=/path/to/pythonX`.
 PYTHON ?= $(shell command -v python3.14 2>/dev/null || command -v python3.13 2>/dev/null || command -v python3.12 2>/dev/null || command -v python3.11 2>/dev/null || command -v python3 2>/dev/null || echo python3)
@@ -21,7 +24,7 @@ install: venv  ## install project + dev deps into the venv
 
 # ── docker-compose stack ─────────────────────────────────────────────
 
-up:  ## build and run the full local stack (broker, control-plane, audit-service, metering-service, DynamoDB Local, MinIO, ClickHouse)
+up: bootstrap-env  ## build and run the full local stack (broker, control-plane, audit-service, metering-service, DynamoDB Local, MinIO, ClickHouse)
 	docker compose up --build
 
 up-detached:  ## like 'up' but in the background
