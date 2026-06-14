@@ -1,12 +1,14 @@
 # Sovereign Platform
 
-A compliance-native self-service infrastructure platform for regulated and government environments. Sovereign Platform ships as a **base chassis** plus modular **service packs** — all of which now live in `packs/`: AI, Data, SecOps, Identity, Multi-Cloud, Edge, Comms, Blockchain, and FinOps (the roadmap's Developer Platform capability is delivered through the AI and Data packs). See [Service packs](#service-packs) for the full catalog.
+A compliance-focused self-service infrastructure platform for regulated and government environments. Sovereign Platform ships as a **base chassis** plus modular **service packs** — all of which now live in `packs/`: AI, Data, SecOps, Identity, Multi-Cloud, Edge, Comms, Blockchain, and FinOps (the roadmap's Developer Platform capability is delivered through the AI and Data packs). See [Service packs](#service-packs) for the full catalog.
 
-> **North star**: any team inside a government agency can provision compliant infrastructure in minutes, not weeks. Every resource is born hardened, auditable, and policy-checked. The platform is the single control plane for all infrastructure.
+> **North star**: any team inside a government agency can provision policy-checked, hardened infrastructure in minutes, not weeks. Every resource is intended to be born hardened, auditable, and policy-checked. The goal is a single control plane for all infrastructure.
 
 The base chassis grew out of a clean-room Open Service Broker implementation — Envoy control plane, OSB lifecycle, dynamic templates, Packer/SaltStack image automation, multi-region load-balancer deployment, sidecar support, and operational auditability. Governance services (dedicated audit pipeline, metering, policy decision models) were merged in from the sovereign-ai-broker prototype during Phase 0 of the product roadmap.
 
 > This repository does not contain proprietary code, diagrams, or confidential implementation details from any third party. It implements common cloud/platform-engineering patterns from public summaries and fills missing pieces with standard engineering design.
+
+> **Project status.** Early-stage, single-maintainer project. The chassis and packs are functional and CI-gated, but the platform has **not** been independently security-audited or penetration-tested, holds no ATO or accreditation, and has no production or government deployments yet. NIST SP 800-53 references throughout describe control *mappings and design intent* — not assessed or certified compliance. Evaluate accordingly.
 
 ## Base chassis services
 
