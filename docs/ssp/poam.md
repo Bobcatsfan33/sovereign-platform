@@ -19,7 +19,7 @@ Severity scale:
 | --- | --- | --- | --- | --- | --- | --- |
 | 5.4-A | Medium | Switch chassis container base from `python:3.11-slim` to a FIPS-validated Python build | SC-13, IA-7 | Platform Eng | 2026-Q4 | open |
 | 5.4-CVE-OPENSSL | Medium | 7 OpenSSL CVEs (CVE-2025-15467, CVE-2025-69421, CVE-2026-28387 .. -28390, CVE-2026-31789) ignored in `.trivyignore` pending Debian point-release availability | SC-13, SI-2 | Platform Eng | 2026-Q3 | open — quarterly review next 2026-08 |
-| 5.4-CVE-libxml2 | Medium | Portal `nginx:1.27.4-alpine` inherits CVE-2026-6732 in libxml2 on architectures where the Alpine 3.21 fix has not propagated | SI-2, SA-22 | Platform Eng | 2026-Q3 | open — remove `.trivyignore` entry when `libxml2>=2.13.9-r1` resolves on x86_64 |
+| 5.4-CVE-libxml2 | Medium | Portal `nginx:1.27.4-alpine` inherited CVE-2026-6732 in libxml2 — base bumped to `nginx:1.30.3-alpine`; verify fix ships on x86_64 and remove `.trivyignore` entry | SI-2, SA-22 | Platform Eng | 2026-Q3 | mitigating — verify CI green then close |
 | 5.4-CVE-GNUTLS | Medium | 7 GnuTLS CVEs ignored in `.trivyignore`; gnutls is not linked by any chassis service | SC-13, SI-2 | Platform Eng | 2026-Q3 | open — quarterly review next 2026-08 |
 | 5.4-CVE-MISC | Low | 10 system-package CVEs (gnupg, libcap, sqlite, xz, pam, perl, setuptools, wheel) ignored in `.trivyignore`; build-time / out-of-call-graph for chassis runtime | SI-2 | Platform Eng | 2026-Q3 | open — quarterly review next 2026-08 |
 | 5.4-C | Low | Switch to chainguard/python distroless base to eliminate the inherited CVE allow-list entirely | SC-13, SA-22 | Platform Eng | 2026-Q4 | open — depends on FIPS validation status of chainguard's Python build |

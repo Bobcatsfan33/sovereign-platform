@@ -18,11 +18,15 @@ ENV VITE_DEV_BEARER_TOKEN=${VITE_DEV_BEARER_TOKEN}
 RUN npm run build
 
 ## Stage 2 — serve the static bundle ──────────────────────────────────
-# `nginx:1.27-alpine` ships an `nginx` non-root user but the default
+# `nginx:stable-alpine` ships an `nginx` non-root user but the default
 # config still binds :80 (privileged). We rebind to :8080 inside the
 # container and let the orchestrator publish on :8088 externally —
 # matches docker-compose port mapping.
-FROM nginx:1.27.4-alpine
+#
+# Bumped from 1.27.4 → 1.30.3 to remediate CVE-2026-42945 ("NGINX Rift",
+# CVSS 9.2 Critical — heap buffer overflow in ngx_http_rewrite_module,
+# affects all versions 0.6.27–1.30.0). Fixed in 1.30.1+/1.31.0+.
+FROM nginx:1.30.3-alpine
 
 LABEL org.opencontainers.image.title="sovereign-platform-portal" \
       org.opencontainers.image.description="Sovereign Platform self-service catalog SPA (React/TS)" \
@@ -31,14 +35,11 @@ LABEL org.opencontainers.image.title="sovereign-platform-portal" \
       org.opencontainers.image.vendor="Sovereign Platform"
 
 # Refresh Alpine packages so the runtime layer picks up the latest
-# security patches available at build time. This pulls libxml2's
-# CVE-2026-6732 fix (2.13.9-r1) automatically on architectures where
-# Alpine 3.21 has already backported it (e.g. aarch64); on x86_64 the
-# backport is still propagating, and libxml2 cannot be force-upgraded
-# ahead of it because nginx-module-xslt/njs + libxslt hard-link the base
-# libxml2.so.2 (see .trivyignore CVE-2026-6732 + POA&M 5.4-CVE-libxml2).
-# `--update-cache` makes the cache key change per build so buildx's
-# gha cache cannot replay a stale apk layer past a published fix.
+# security patches available at build time. The base image bump to
+# 1.30.3-alpine should resolve the libxml2 CVE-2026-6732 fix as well
+# (newer Alpine ships 2.13.9-r1+ on x86_64). `--update-cache` makes
+# the cache key change per build so buildx's gha cache cannot replay
+# a stale apk layer past a published fix.
 RUN apk --no-cache --update-cache upgrade
 
 COPY apps/portal/nginx.conf /etc/nginx/conf.d/default.conf

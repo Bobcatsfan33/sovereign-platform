@@ -11,7 +11,7 @@
 #   - Each entry is reviewed quarterly against the upstream Debian /
 #     Alpine security tracker; entries with an available fixed version
 #     in the chassis base image MUST be removed (and the base bumped).
-#   - Last review: 2026-05-24.
+#   - Last review: 2026-06-24.
 
 # ── OpenSSL (Debian bookworm libssl3) ────────────────────────────────
 # All OpenSSL findings are in the system-shipped libssl3 / openssl
@@ -30,17 +30,11 @@ CVE-2026-31789   # openssl: X.509 heap overflow on 32-bit — chassis runs 64-bi
 
 # ── libxml2 (portal nginx:alpine image) ──────────────────────────────
 # CVE-2026-6732 (HIGH, CVSS 7.5) — libxml2 XSD-validation type-confusion
-# DoS. Fixed in libxml2 2.13.9-r1. TIME-BOXED allow-list, NOT a
-# permanent waiver: the fix IS published on aarch64 and the Dockerfile's
-# `apk upgrade` already pulls it there, but the Alpine 3.21 x86_64
-# backport is still propagating and libxml2 cannot be force-upgraded
-# ahead of it (nginx-module-xslt/njs + libxslt hard-link libxml2.so.2).
-# Reachability: the portal is a static nginx file server for the
-# pre-built SPA — it does not parse XSD-validated XML, so the DoS path is
-# not in its runtime call graph. POA&M 5.4-CVE-libxml2 tracks removal;
-# this entry MUST be deleted the moment `apk add libxml2>=2.13.9-r1`
-# resolves on x86_64 (re-check at next quarterly review).
-CVE-2026-6732    # libxml2: XSD-validation DoS — fix pending x86_64 backport; portal serves static files only
+# DoS. Fixed in libxml2 2.13.9-r1. Retained pending CI verification that
+# the nginx:1.30.3-alpine base image ships the fix on x86_64. If the
+# portal docker-build job passes Trivy without this entry, remove it
+# and close POA&M 5.4-CVE-libxml2.
+CVE-2026-6732    # libxml2: XSD-validation DoS — verify resolved by 1.30.3-alpine base bump; remove if CI green
 
 # ── GnuTLS (Debian-shipped, not used by chassis) ─────────────────────
 # Pulled in transitively by ca-certificates, apt, gnupg — none of the
