@@ -18,7 +18,7 @@ Every chassis image satisfies the following:
 
 | # | Requirement | How / Evidence |
 | --- | --- | --- |
-| 1 | Pinned base image tag (no `:latest`) | `python:3.11.10-slim-bookworm`, `nginx:1.27.4-alpine`, `node:22.13.0-alpine`, `openpolicyagent/opa:1.6.0-rootless` (compose). |
+| 1 | Pinned base image tag (no `:latest`) | `python:3.11.10-slim-bookworm`, `nginx:1.30.3-alpine`, `node:22.13.0-alpine`, `openpolicyagent/opa:1.6.0-rootless` (compose). |
 | 2 | Non-root runtime user | Each Python image creates `sovereign:1000` and `USER sovereign:sovereign` before CMD. The portal image runs as the upstream nginx image's `nginx` user. |
 | 3 | OCI provenance labels | `org.opencontainers.image.{title,description,source,licenses,vendor}` set on every chassis image so the registry surfaces them. |
 | 4 | HEALTHCHECK | Every chassis service image declares a HEALTHCHECK that hits `/healthz`. The orchestrator restarts a container that fails the check. |
