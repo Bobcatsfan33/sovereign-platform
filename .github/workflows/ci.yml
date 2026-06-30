@@ -211,6 +211,10 @@ jobs:
           format: sarif
           output: trivy-${{ matrix.service }}.sarif
           severity: CRITICAL,HIGH
+          # format: sarif makes trivy-action unset the severity filter unless
+          # this is set, so exit-code would fire on ALL severities (incl.
+          # MEDIUM). Pin the gate to the configured severities only.
+          limit-severities-for-sarif: true
           exit-code: "1"
           ignore-unfixed: true
           # Absolute path — the trivy-action entrypoint resolves
