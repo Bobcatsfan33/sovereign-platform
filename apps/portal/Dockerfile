@@ -11,11 +11,16 @@ RUN npm ci --no-audit --no-fund
 COPY apps/portal/ ./
 ARG VITE_BROKER_URL=
 ARG VITE_AUDIT_URL=
-ARG VITE_DEV_BEARER_TOKEN=dev-token
 ENV VITE_BROKER_URL=${VITE_BROKER_URL}
 ENV VITE_AUDIT_URL=${VITE_AUDIT_URL}
-ENV VITE_DEV_BEARER_TOKEN=${VITE_DEV_BEARER_TOKEN}
-RUN npm run build
+# VITE_DEV_BEARER_TOKEN is inlined into the SPA bundle by Vite at build
+# time (a dev convenience; production auth is OIDC). Pass it through a
+# BuildKit secret instead of ARG/ENV so the value never persists in an
+# image layer or metadata. Falls back to the dev default when no secret
+# is mounted (e.g. CI), so the build is unchanged without one.
+RUN --mount=type=secret,id=vite_dev_bearer_token \
+    VITE_DEV_BEARER_TOKEN="$(cat /run/secrets/vite_dev_bearer_token 2>/dev/null || echo dev-token)" \
+    npm run build
 
 ## Stage 2 — serve the static bundle ──────────────────────────────────
 # `nginx:stable-alpine` ships an `nginx` non-root user but the default
