@@ -76,7 +76,9 @@ def test_get_config_returns_yaml(control_plane_app: Any) -> None:
         key_parts = post.json()["key"].split("/")
         instance_id, version = key_parts[1], int(key_parts[2].lstrip("v"))
 
-        r = client.get(f"/instances/{instance_id}/versions/{version}/envoy.yaml")
+        r = client.get(
+            f"/instances/{instance_id}/versions/{version}/envoy.yaml", headers=AUTH_HEADER
+        )
         assert r.status_code == 200
         # 0.5 fixed get_config to return raw YAML with the correct
         # content-type rather than a JSON-encoded string.
@@ -90,9 +92,18 @@ def test_get_config_returns_yaml(control_plane_app: Any) -> None:
 
 
 @mock_aws
+def test_get_config_requires_bearer(control_plane_app: Any) -> None:
+    """Regression: the rendered config is tenant infrastructure detail —
+    it must never be downloadable without a verified caller identity."""
+    with TestClient(control_plane_app.app) as client:
+        r = client.get("/instances/demo-lb/versions/1/envoy.yaml")
+        assert r.status_code == 401
+
+
+@mock_aws
 def test_get_config_404_for_missing(control_plane_app: Any) -> None:
     with TestClient(control_plane_app.app) as client:
-        r = client.get("/instances/missing/versions/1/envoy.yaml")
+        r = client.get("/instances/missing/versions/1/envoy.yaml", headers=AUTH_HEADER)
         assert r.status_code == 404
         # Problem-detail shape installed in 0.5
         body = r.json()

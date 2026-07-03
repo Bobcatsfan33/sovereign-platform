@@ -1233,12 +1233,18 @@ def unbind(
     binding_id: str,
     caller: Caller = Depends(state_change_identify),
 ) -> dict[str, Any]:
+    inst = store.get_instance(instance_id)
+    if not inst:
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="instance already absent")
+    tenant_id = _resolve_tenant_id(caller, inst.organization_guid)
+    _enforce_rbac(caller, tenant_id=tenant_id, action="bind")
     store.delete_binding(binding_id)
     audit.emit(
         "binding.deleted",
         binding_id,
         details=instance_id,
         actor=caller.user.principal,
+        tenant_id=tenant_id,
         metadata={"instance_id": instance_id},
     )
     return {}
