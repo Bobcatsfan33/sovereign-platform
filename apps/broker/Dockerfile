@@ -44,6 +44,16 @@ RUN pip install --no-cache-dir --upgrade pip setuptools wheel \
       "PyYAML>=6.0" \
       "python-dotenv>=1.0"
 
+# Service packs. Install them as real distributions (not just files on
+# PYTHONPATH) so their `sovereign.packs` entry points are visible to the
+# chassis discover_packs() at startup — the vending machine vends nothing
+# without them.
+COPY packs /app/packs
+RUN pip install --no-cache-dir \
+      /app/packs/ai /app/packs/blockchain /app/packs/comms /app/packs/data \
+      /app/packs/edge /app/packs/finops /app/packs/identity \
+      /app/packs/multicloud /app/packs/secops
+
 RUN chown -R sovereign:sovereign /app
 
 ENV PYTHONPATH=/app/libs/common \

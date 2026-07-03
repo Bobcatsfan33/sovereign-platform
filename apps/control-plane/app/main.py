@@ -225,7 +225,10 @@ async def diff(req: RenderRequest) -> dict[str, Any]:
     }
 
 
-@app.get("/instances/{instance_id}/versions/{version}/envoy.yaml")
+@app.get(
+    "/instances/{instance_id}/versions/{version}/envoy.yaml",
+    dependencies=[Depends(require_bearer)],
+)
 def get_config(instance_id: str, version: int) -> Response:
     """Return the rendered Envoy YAML for the given instance + version.
     Renderer-agnostic file serving comes later in Phase 1; this route

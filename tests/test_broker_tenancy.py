@@ -328,3 +328,46 @@ def test_usage_endpoint_requires_read(broker_phase3: Any) -> None:
             "/v2/usage/ecm", headers={"Authorization": f"Bearer {token}"}
         )
         assert r.status_code == 403
+
+
+@mock_aws
+def test_unbind_enforces_rbac_in_instance_tenant(broker_phase3: Any) -> None:
+    """Regression: unbind used to skip RBAC entirely, so any authenticated
+    JWT caller could delete bindings in other tenants."""
+    with TestClient(broker_phase3.app) as client:
+        _seed_tree(broker_phase3)
+        # Stand up an instance + binding in ecm via the trusted system path.
+        r = client.put(
+            "/v2/service_instances/i-ecm-unbind",
+            json=_provision_body(organization_guid="ecm"),
+            auth=("broker", "broker"),
+        )
+        assert r.status_code == 201, r.text
+        r = client.put(
+            "/v2/service_instances/i-ecm-unbind/service_bindings/b-ecm",
+            json={"service_id": "sovereign-envoy-lb", "plan_id": "standard-regional"},
+            auth=("broker", "broker"),
+        )
+        assert r.status_code == 201, r.text
+
+        # Alice (program-team on cade2) must not unbind in sibling ecm.
+        token = mint_dev_token(sub="alice@gov", tenant_id="cade2")
+        r = client.delete(
+            "/v2/service_instances/i-ecm-unbind/service_bindings/b-ecm",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 403
+        detail = r.json()["detail"]
+        assert detail["action"] == "bind"
+        assert detail["tenant_id"] == "ecm"
+        # The binding survived the denied attempt.
+        assert broker_phase3.store.get_binding("b-ecm") is not None
+
+        # Bob (bureau-admin on irs) inherits down into ecm and may unbind.
+        token = mint_dev_token(sub="bob@gov")
+        r = client.delete(
+            "/v2/service_instances/i-ecm-unbind/service_bindings/b-ecm",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 200, r.text
+        assert broker_phase3.store.get_binding("b-ecm") is None
