@@ -37,11 +37,21 @@ def test_base_pack_subclass_requires_name() -> None:
             pass
 
 
+def test_base_pack_subclass_rejects_unknown_maturity() -> None:
+    with pytest.raises(TypeError, match="maturity"):
+
+        class _BadMaturityPack(BasePack):
+            name = "bad-maturity-pack"
+            maturity = "beta"
+
+
 def test_base_pack_manifest_shape() -> None:
     class _Pack(BasePack):
         name = "test-pack"
         version = "1.2.3"
         description = "A test pack."
+        maturity = "ga"
+        maturity_summary = "Ready for production."
         renderers: ClassVar[list] = []
         connectors: ClassVar[list] = []
         policy_bundles: ClassVar[list] = [Path("/tmp/policies")]
@@ -49,6 +59,8 @@ def test_base_pack_manifest_shape() -> None:
     m = _Pack().manifest()
     assert m["name"] == "test-pack"
     assert m["version"] == "1.2.3"
+    assert m["maturity"] == "ga"
+    assert m["maturity_summary"] == "Ready for production."
     assert m["policy_bundles"] == ["/tmp/policies"]
 
 
