@@ -34,6 +34,10 @@ entry-point group at startup). Each pack contributes one or more
 Rego bundle (100% test coverage, gated in CI) mapped to NIST SP 800-53
 controls.
 
+Pack manifests also expose a `maturity` field (`ga`, `preview`, or `lab`) on
+`/healthz`; see [Service pack maturity](docs/service-pack-maturity.md) for the
+buyer-facing definitions.
+
 Renderers are pure: they produce a `RenderedArtifact` whose
 `deployment_manifest` is applied by a chassis **deployment executor**
 (`k8s-apply` / `terraform-apply` / config-only) — packs ship no apply
@@ -41,18 +45,18 @@ logic of their own. Packs that emit policy **obligations** (PII redaction,
 audit tagging, validator registration, …) have them enforced fail-closed
 by the broker at provision time.
 
-| Pack | Service types | Backend | Key NIST controls |
-| --- | --- | --- | --- |
-| **AI** (`packs/ai`) | `inference-endpoint`, `rag-workspace` | k8s-apply | AC-4, SC-8, SC-28, SI-12 |
-| **Data** (`packs/data`) | `managed-database`, `vector-db` | terraform-apply | SC-28, CP-9, SI-12 |
-| **SecOps** (`packs/secops`) | `siem-workspace`, `log-pipeline` | k8s-apply | AU-9, AU-10, AU-11, SI-4 |
-| **Identity** (`packs/identity`) | `idp-broker`, `scim-bridge` | config-only | IA-2, IA-2(1), IA-2(12), IA-4, IA-8 |
-| **Multi-Cloud** (`packs/multicloud`) | `cloud-account`, `landing-zone` | terraform-apply | AC-4, CM-2, SC-7, AU-2 |
-| **Edge** (`packs/edge`) | `edge-node`, `edge-cluster` | k8s-apply | SI-7, SI-7(9), SC-28, SR-11 |
-| **Comms** (`packs/comms`) | `secure-email`, `secure-chat` | config-only | SC-8, SC-13, AU-11, AC-4 |
-| **Blockchain** (`packs/blockchain`) | `permissioned-ledger` | k8s-apply | AC-3, IA-3, SC-12, SC-13 |
-| **FinOps** (`packs/finops`) | `budget`, `chargeback-report` | metering (no infra) | SA-2, PM-3, AU-6 |
-| **Developer Platform** | folded into AI/Data (container & data services) | — | — |
+| Pack | Maturity | Service types | Backend | Key NIST controls |
+| --- | --- | --- | --- | --- |
+| **AI** (`packs/ai`) | preview | `inference-endpoint`, `rag-workspace` | k8s-apply | AC-4, SC-8, SC-28, SI-12 |
+| **Data** (`packs/data`) | preview | `managed-database`, `vector-db` | terraform-apply | SC-28, CP-9, SI-12 |
+| **SecOps** (`packs/secops`) | preview | `siem-workspace`, `log-pipeline` | k8s-apply | AU-9, AU-10, AU-11, SI-4 |
+| **Identity** (`packs/identity`) | preview | `idp-broker`, `scim-bridge` | config-only | IA-2, IA-2(1), IA-2(12), IA-4, IA-8 |
+| **Multi-Cloud** (`packs/multicloud`) | lab | `cloud-account`, `landing-zone` | terraform-apply | AC-4, CM-2, SC-7, AU-2 |
+| **Edge** (`packs/edge`) | lab | `edge-node`, `edge-cluster` | k8s-apply | SI-7, SI-7(9), SC-28, SR-11 |
+| **Comms** (`packs/comms`) | lab | `secure-email`, `secure-chat` | config-only | SC-8, SC-13, AU-11, AC-4 |
+| **Blockchain** (`packs/blockchain`) | lab | `permissioned-ledger` | k8s-apply | AC-3, IA-3, SC-12, SC-13 |
+| **FinOps** (`packs/finops`) | ga | `budget`, `chargeback-report` | metering (no infra) | SA-2, PM-3, AU-6 |
+| **Developer Platform** | roadmap | folded into AI/Data (container & data services) | - | - |
 
 > The Developer Platform capability from the roadmap is delivered through
 > the AI and Data packs' container/data service types rather than a

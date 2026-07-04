@@ -105,6 +105,8 @@ class Pack(BasePack):
     name = "sovereign-finops-pack"
     version = "0.1.0"
     description = "Cost models, budgets, and chargeback over the chassis metering layer."
+    maturity = "ga"
+    maturity_summary = "Low-risk governance pack backed by chassis metering; ready for controlled production use."
 
     renderers: ClassVar[list] = []  # renderer-less: reads existing metering data
     connectors: ClassVar[list] = []

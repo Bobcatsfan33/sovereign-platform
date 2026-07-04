@@ -31,6 +31,8 @@ class Pack(BasePack):
     name = "sovereign-comms-pack"
     version = "0.1.0"
     description = "Secure email and chat channels with transmission-confidentiality and retention policy."
+    maturity = "lab"
+    maturity_summary = "Design-complete pack that needs provider-specific email/chat integration."
 
     renderers: ClassVar[list] = [SecureEmailRenderer, SecureChatRenderer]
     connectors: ClassVar[list] = []

@@ -34,6 +34,8 @@ class Pack(BasePack):
     name = "sovereign-ai-pack"
     version = "0.1.0"
     description = "Managed inference endpoints and RAG workspaces with model-governance policy."
+    maturity = "preview"
+    maturity_summary = "Ready for governed pilot deployments; requires live workload validation."
 
     renderers: ClassVar[list] = [InferenceEndpointRenderer, RagWorkspaceRenderer]
     connectors: ClassVar[list] = []  # reuses chassis S3/GitHub connectors for RAG ingestion

@@ -32,6 +32,8 @@ class Pack(BasePack):
     name = "sovereign-blockchain-pack"
     version = "0.1.0"
     description = "Permissioned distributed ledgers with membership, identity, and key-custody policy."
+    maturity = "lab"
+    maturity_summary = "Specialized pack that needs buyer-specific ledger, HSM, and validator validation."
 
     renderers: ClassVar[list] = [PermissionedLedgerRenderer]
     connectors: ClassVar[list] = []

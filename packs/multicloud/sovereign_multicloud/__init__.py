@@ -31,6 +31,8 @@ class Pack(BasePack):
     name = "sovereign-multicloud-pack"
     version = "0.1.0"
     description = "Governed cloud accounts and landing zones across GovCloud/Azure-Gov/GCP with residency policy."
+    maturity = "lab"
+    maturity_summary = "Design-complete pack that needs live multi-cloud landing-zone validation."
 
     renderers: ClassVar[list] = [CloudAccountRenderer, LandingZoneRenderer]
     connectors: ClassVar[list] = []

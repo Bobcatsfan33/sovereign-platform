@@ -33,6 +33,8 @@ class Pack(BasePack):
     name = "sovereign-data-pack"
     version = "0.1.0"
     description = "Managed databases and vector stores provisioned via Terraform, with data-protection policy."
+    maturity = "preview"
+    maturity_summary = "Ready for non-production Terraform pilots against buyer cloud accounts."
 
     renderers: ClassVar[list] = [ManagedDatabaseRenderer, VectorDbRenderer]
     connectors: ClassVar[list] = []

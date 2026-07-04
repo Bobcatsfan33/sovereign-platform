@@ -31,6 +31,8 @@ class Pack(BasePack):
     name = "sovereign-identity-pack"
     version = "0.1.0"
     description = "IdP broker and SCIM bridge over the chassis identity plane, with IA-family policy."
+    maturity = "preview"
+    maturity_summary = "Ready for IdP/SCIM integration pilots after customer directory mapping."
 
     renderers: ClassVar[list] = [IdpBrokerRenderer, ScimBridgeRenderer]
     connectors: ClassVar[list] = []

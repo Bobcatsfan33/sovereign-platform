@@ -32,6 +32,8 @@ class Pack(BasePack):
     name = "sovereign-edge-pack"
     version = "0.1.0"
     description = "Hardened edge nodes and clusters with FIPS-image + attestation policy."
+    maturity = "lab"
+    maturity_summary = "Design-complete pack that needs hardware and disconnected-site validation."
 
     renderers: ClassVar[list] = [EdgeNodeRenderer, EdgeClusterRenderer]
     connectors: ClassVar[list] = []

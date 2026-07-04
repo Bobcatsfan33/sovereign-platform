@@ -31,6 +31,8 @@ class Pack(BasePack):
     name = "sovereign-secops-pack"
     version = "0.1.0"
     description = "SIEM workspaces and log pipelines with audit-family (AU-*) policy enforcement."
+    maturity = "preview"
+    maturity_summary = "Ready for security-operations pilot use with buyer SIEM/log retention assumptions."
 
     renderers: ClassVar[list] = [SiemWorkspaceRenderer, LogPipelineRenderer]
     connectors: ClassVar[list] = []

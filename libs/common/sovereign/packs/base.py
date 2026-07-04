@@ -23,6 +23,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("sovereign.packs")
 
+MATURITY_LEVELS = {"ga", "preview", "lab"}
+
 
 class BasePack:
     """Base class for a Sovereign service pack.
@@ -43,6 +45,10 @@ class BasePack:
     name: ClassVar[str] = ""
     version: ClassVar[str] = "0.0.0"
     description: ClassVar[str] = ""
+    maturity: ClassVar[str] = "preview"
+    maturity_summary: ClassVar[str] = (
+        "Functional pack that requires a buyer pilot before production adoption."
+    )
 
     renderers: ClassVar[list[type[BaseRenderer]]] = []
     connectors: ClassVar[list[type[BaseConnector]]] = []
@@ -59,6 +65,10 @@ class BasePack:
         if not cls.name:
             raise TypeError(
                 f"{cls.__name__} must declare a class-level `name` string"
+            )
+        if cls.maturity not in MATURITY_LEVELS:
+            raise TypeError(
+                f"{cls.__name__}.maturity must be one of {sorted(MATURITY_LEVELS)}"
             )
 
     def register(self) -> None:
@@ -100,6 +110,8 @@ class BasePack:
             "name": self.name,
             "version": self.version,
             "description": self.description,
+            "maturity": self.maturity,
+            "maturity_summary": self.maturity_summary,
             "renderers": [
                 getattr(r, "service_type", r.__name__) for r in self.renderers
             ],
